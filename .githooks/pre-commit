@@ -1,0 +1,14 @@
+#!/bin/sh
+set -e
+
+# Pre-commit hook: lint and tests must pass before a commit lands.
+# Wired up via `core.hooksPath = .githooks` (set by the `prepare` script
+# in package.json on `bun install`).
+#
+# To skip in an emergency: `git commit --no-verify` (use sparingly).
+
+printf "→ bun run check\n"
+bun run check
+
+printf "→ bun test\n"
+bun test

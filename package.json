@@ -12,6 +12,7 @@
     "build:compile": "bun build ./src/cli/index.tsx --compile --outfile ./dist/juno",
     "check": "biome check .",
     "format": "biome format --write .",
+    "prepare": "git config core.hooksPath .githooks 2>/dev/null || true",
     "release": "./scripts/release.sh",
     "test": "bun test",
     "typecheck": "bunx tsc --noEmit"
