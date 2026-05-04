@@ -259,7 +259,7 @@ The model client could not find an API key. Either:
 - export `OPENAI_API_KEY`, or
 - run `juno login` (or `juno login --with-api-key`).
 
-If you logged in with `--browser` or `--device-auth`, the OAuth `id_token` → API-key exchange may have silently failed. Check the login output for the "API-key exchange was unavailable" warning. The OAuth credential alone is not currently used to sign model requests — Juno calls OpenAI with an API key. Until that is fixed, OAuth users still need `OPENAI_API_KEY` exported. (Tracked in `docs/TODO.md` under *Auth reliability* and *Stronger split between OAuth credentials and API-key credentials*.)
+If you logged in with `--browser` or `--device-auth` and still see this error, you likely have **no** stored credential at all (e.g. you ran `juno logout` or `auth.json` was removed). Re-run `juno login` with the desired flow. OAuth-only credentials no longer require an `OPENAI_API_KEY` fallback — calls automatically route via the ChatGPT Codex backend (`https://chatgpt.com/backend-api/codex/responses`) using the stored `access_token`. If the original `id_token` → API-key exchange failed during login, the CLI surfaces `API-key exchange unavailable. Calls will route via the ChatGPT Codex backend using your OAuth credential.` and continues working.
 
 **`Invalid config at <path>: ...`**
 Your `config.json` is malformed or contains an unsupported key. The error message names the offending field. The supported key list is exhaustive — Juno rejects unknown keys on purpose. Fix the file or delete it to fall back to defaults.
