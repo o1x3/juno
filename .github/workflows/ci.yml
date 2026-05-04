@@ -28,3 +28,9 @@ jobs:
 
       - name: Test
         run: bun test
+
+      - name: Build (compile standalone binary)
+        run: bun run build:compile
+
+      - name: Smoke (compiled binary)
+        run: ./dist/juno --help
