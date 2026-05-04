@@ -1,0 +1,17 @@
+docs/
+node_modules/
+.DS_Store
+dist/
+build/
+coverage/
+.cache/
+.tmp/
+tmp/
+*.log
+.env
+.env.*
+!.env.example
+.agent/
+.codex-agent/
+.sessions/
+.auth/
