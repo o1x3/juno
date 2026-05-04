@@ -1,0 +1,33 @@
+{
+  "name": "nexus-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "agent": "./src/cli/index.tsx"
+  },
+  "scripts": {
+    "dev": "bun run src/cli/index.tsx",
+    "build": "bun build ./src/cli/index.tsx --outfile ./dist/agent.js --target bun",
+    "build:compile": "bun build ./src/cli/index.tsx --compile --outfile ./dist/agent",
+    "check": "biome check .",
+    "format": "biome format --write .",
+    "test": "bun test",
+    "typecheck": "bunx tsc --noEmit"
+  },
+  "dependencies": {
+    "@ai-sdk/openai": "^2.0.0",
+    "ai": "^5.0.0",
+    "citty": "^0.1.6",
+    "ink": "^6.3.1",
+    "ink-text-input": "^6.0.0",
+    "react": "^19.2.0",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.2.6",
+    "@types/bun": "^1.3.5",
+    "@types/react": "^19.2.2",
+    "typescript": "^5.9.3"
+  }
+}
