@@ -10,5 +10,8 @@ set -e
 printf "→ bun run check\n"
 bun run check
 
+printf "→ bun run typecheck\n"
+bun run typecheck
+
 printf "→ bun test\n"
 bun test
