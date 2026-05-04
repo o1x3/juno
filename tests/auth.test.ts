@@ -20,7 +20,7 @@ afterEach(async () => {
 
 describe('auth storage', () => {
   test('persists credentials with restrictive permissions', async () => {
-    workspace = await mkdtemp(join(tmpdir(), 'nexus-auth-'));
+    workspace = await mkdtemp(join(tmpdir(), 'juno-auth-'));
     const authFile = join(workspace, 'auth.json');
     await saveCredential(authFile, {
       provider: 'codex',

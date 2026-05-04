@@ -4,15 +4,14 @@ import { createServer } from 'node:http';
 import type { CredentialRecord } from '@/types';
 
 const CLIENT_ID =
-  process.env.NEXUS_AGENT_OPENAI_CLIENT_ID ?? 'app_EMoamEEZ73f0CkXaXp7hrann';
+  process.env.JUNO_OPENAI_CLIENT_ID ?? 'app_EMoamEEZ73f0CkXaXp7hrann';
 const AUTHORIZE_URL =
-  process.env.NEXUS_AGENT_OPENAI_AUTHORIZE_URL ??
+  process.env.JUNO_OPENAI_AUTHORIZE_URL ??
   'https://auth.openai.com/oauth/authorize';
 const TOKEN_URL =
-  process.env.NEXUS_AGENT_OPENAI_TOKEN_URL ??
-  'https://auth.openai.com/oauth/token';
+  process.env.JUNO_OPENAI_TOKEN_URL ?? 'https://auth.openai.com/oauth/token';
 const DEVICE_ACCOUNTS_URL =
-  process.env.NEXUS_AGENT_OPENAI_DEVICE_ACCOUNTS_URL ??
+  process.env.JUNO_OPENAI_DEVICE_ACCOUNTS_URL ??
   'https://auth.openai.com/api/accounts';
 
 function base64Url(buffer: Uint8Array): string {

@@ -16,7 +16,7 @@ afterEach(async () => {
 
 describe('builtin tools', () => {
   test('edit fails on ambiguous match', async () => {
-    workspace = await mkdtemp(join(tmpdir(), 'nexus-tools-'));
+    workspace = await mkdtemp(join(tmpdir(), 'juno-tools-'));
     const filePath = join(workspace, 'file.txt');
     await writeFile(filePath, 'a\na\n');
     const tool = createBuiltinTools({
@@ -48,7 +48,7 @@ describe('builtin tools', () => {
   });
 
   test('read returns bounded content', async () => {
-    workspace = await mkdtemp(join(tmpdir(), 'nexus-read-'));
+    workspace = await mkdtemp(join(tmpdir(), 'juno-read-'));
     const filePath = join(workspace, 'file.txt');
     await writeFile(filePath, '1\n2\n3\n4\n5\n');
     const tool = createBuiltinTools({

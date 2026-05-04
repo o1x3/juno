@@ -1,15 +1,15 @@
 {
-  "name": "nexus-agent",
+  "name": "juno",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "bin": {
-    "agent": "./src/cli/index.tsx"
+    "juno": "./src/cli/index.tsx"
   },
   "scripts": {
     "dev": "bun run src/cli/index.tsx",
-    "build": "bun build ./src/cli/index.tsx --outfile ./dist/agent.js --target bun",
-    "build:compile": "bun build ./src/cli/index.tsx --compile --outfile ./dist/agent",
+    "build": "bun build ./src/cli/index.tsx --outfile ./dist/juno.js --target bun",
+    "build:compile": "bun build ./src/cli/index.tsx --compile --outfile ./dist/juno",
     "check": "biome check .",
     "format": "biome format --write .",
     "test": "bun test",

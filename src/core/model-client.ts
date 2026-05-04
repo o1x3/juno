@@ -9,15 +9,30 @@ import type {
   ToolCall,
 } from '@/types';
 
-function toModelMessages(messages: SerializedMessage[]): ModelMessage[] {
+export function toToolResultOutput(output: unknown) {
+  if (typeof output === 'string') {
+    return { type: 'text' as const, value: output };
+  }
+
+  return { type: 'json' as const, value: output };
+}
+
+export function toModelMessages(messages: SerializedMessage[]): ModelMessage[] {
   return messages.map((message) => {
     if (message.role === 'user') {
       return {
         role: 'user',
-        content: [{ type: 'text' as const, text: message.content }],
+        content: message.content,
       };
     }
     if (message.role === 'assistant') {
+      if (!message.toolCalls?.length) {
+        return {
+          role: 'assistant',
+          content: message.content,
+        };
+      }
+
       return {
         role: 'assistant',
         content: [
@@ -39,8 +54,7 @@ function toModelMessages(messages: SerializedMessage[]): ModelMessage[] {
         type: 'tool-result' as const,
         toolCallId: result.toolCallId,
         toolName: result.toolName,
-        output: result.output as never,
-        isError: result.isError,
+        output: toToolResultOutput(result.output),
       })),
     };
   }) as ModelMessage[];
@@ -49,7 +63,7 @@ function toModelMessages(messages: SerializedMessage[]): ModelMessage[] {
 export function createAiSdkModelClient(config: AgentConfig): ModelClient {
   if (!config.apiKey) {
     throw new Error(
-      'Missing API credential. Set OPENAI_API_KEY or run `agent login --with-api-key`.',
+      'Missing API credential. Set OPENAI_API_KEY or run `juno login --with-api-key`.',
     );
   }
 

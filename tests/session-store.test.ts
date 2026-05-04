@@ -21,7 +21,7 @@ afterEach(async () => {
 
 describe('session persistence', () => {
   test('appends and restores JSONL rollouts', async () => {
-    workspace = await mkdtemp(join(tmpdir(), 'nexus-sessions-'));
+    workspace = await mkdtemp(join(tmpdir(), 'juno-sessions-'));
     const sessionId = 's1';
 
     await appendSessionEvent(workspace, sessionId, {

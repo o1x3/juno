@@ -16,7 +16,7 @@ afterEach(async () => {
 
 describe('instruction loading', () => {
   test('loads from git root to cwd with AGENTS winning over CLAUDE in the same directory', async () => {
-    workspace = await mkdtemp(join(tmpdir(), 'nexus-instructions-'));
+    workspace = await mkdtemp(join(tmpdir(), 'juno-instructions-'));
     await mkdir(join(workspace, '.git'));
     await mkdir(join(workspace, 'nested', 'child'), { recursive: true });
     await writeFile(join(workspace, 'CLAUDE.md'), 'root claude');

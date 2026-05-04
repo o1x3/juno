@@ -11,7 +11,9 @@ tmp/
 .env
 .env.*
 !.env.example
-.agent/
-.codex-agent/
+.juno/
 .sessions/
 .auth/
+AGENTS.md
+CLAUDE.md
+.claude/

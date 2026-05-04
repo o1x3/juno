@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { defineCommand, runMain } from 'citty';
+import { defineCommand, runCommand, runMain } from 'citty';
 import { render } from 'ink';
 import { loginWithBrowser, loginWithDeviceCode } from '@/auth/codex';
 import { clearCredential, saveCredential } from '@/auth/storage';
@@ -146,8 +146,8 @@ const sessionsCommand = defineCommand({
 
 const main = defineCommand({
   meta: {
-    name: 'agent',
-    description: 'Codex-first local coding agent.',
+    name: 'juno',
+    description: 'Juno, a Codex-first local coding agent.',
   },
   subCommands: {
     chat: chatCommand,
@@ -158,4 +158,25 @@ const main = defineCommand({
   },
 });
 
-await runMain(main);
+const rawArgs = process.argv.slice(2);
+const subCommandNames = new Set(Object.keys(main.subCommands ?? {}));
+const firstPositionalArg = rawArgs.find((arg) => !arg.startsWith('-'));
+const shouldUseDefaultCliHandling =
+  rawArgs.includes('--help') ||
+  rawArgs.includes('-h') ||
+  (rawArgs.length === 1 && rawArgs[0] === '--version') ||
+  !firstPositionalArg ||
+  !subCommandNames.has(firstPositionalArg);
+
+if (shouldUseDefaultCliHandling) {
+  await runMain(main, { rawArgs });
+} else {
+  try {
+    await runCommand(main, { rawArgs });
+  } catch (error) {
+    process.stderr.write(
+      `${error instanceof Error ? error.message : String(error)}\n`,
+    );
+    process.exitCode = 1;
+  }
+}

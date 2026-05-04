@@ -18,7 +18,7 @@ afterEach(async () => {
 
 describe('agent loop', () => {
   test('continues after tool calls and exits on plain assistant text', async () => {
-    workspace = await mkdtemp(join(tmpdir(), 'nexus-loop-'));
+    workspace = await mkdtemp(join(tmpdir(), 'juno-loop-'));
     const config: AgentConfig = {
       cwd: workspace,
       homeDir: workspace,

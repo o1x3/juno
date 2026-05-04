@@ -18,7 +18,7 @@ afterEach(async () => {
 
 describe('smoke path', () => {
   test('applies project instructions, runs tools, and persists a session-friendly turn', async () => {
-    workspace = await mkdtemp(join(tmpdir(), 'nexus-smoke-'));
+    workspace = await mkdtemp(join(tmpdir(), 'juno-smoke-'));
     await mkdir(join(workspace, '.git'));
     await writeFile(join(workspace, 'AGENTS.md'), 'Prefer concise changes.');
 
