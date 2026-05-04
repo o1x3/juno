@@ -167,18 +167,22 @@ const main = defineCommand({
 const rawArgs = process.argv.slice(2);
 const subCommandNames = new Set(Object.keys(main.subCommands ?? {}));
 const firstPositionalArg = rawArgs.find((arg) => !arg.startsWith('-'));
-const shouldUseDefaultCliHandling =
+const isMetaInvocation =
   rawArgs.includes('--help') ||
   rawArgs.includes('-h') ||
-  (rawArgs.length === 1 && rawArgs[0] === '--version') ||
-  !firstPositionalArg ||
-  !subCommandNames.has(firstPositionalArg);
+  (rawArgs.length === 1 && rawArgs[0] === '--version');
 
-if (shouldUseDefaultCliHandling) {
-  await runMain(main, { rawArgs });
+const dispatchArgs =
+  isMetaInvocation ||
+  (firstPositionalArg && subCommandNames.has(firstPositionalArg))
+    ? rawArgs
+    : ['chat', ...rawArgs];
+
+if (isMetaInvocation) {
+  await runMain(main, { rawArgs: dispatchArgs });
 } else {
   try {
-    await runCommand(main, { rawArgs });
+    await runCommand(main, { rawArgs: dispatchArgs });
   } catch (error) {
     process.stderr.write(
       `${error instanceof Error ? error.message : String(error)}\n`,
