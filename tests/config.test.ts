@@ -246,9 +246,10 @@ describe('resolveConfig', () => {
     workspace = await mkdtemp(join(tmpdir(), 'juno-config-'));
     const configPath = await writeConfigFile(workspace, '{"model":');
 
+    const scriptPath = join(import.meta.dir, '..', 'src', 'cli', 'index.tsx');
     const cli = Bun.spawnSync({
-      cmd: ['bun', 'run', 'src/cli/index.tsx', 'sessions'],
-      cwd: '/Users/karthikvinayan/code/work/juno/nexus',
+      cmd: [process.execPath, 'run', scriptPath, 'sessions'],
+      cwd: workspace,
       env: {
         ...process.env,
         JUNO_HOME: workspace,
