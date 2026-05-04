@@ -17,6 +17,8 @@ const configFileSchema = z
     toolOutputLimit: z.number().int().positive().finite().optional(),
     readLineLimit: z.number().int().positive().finite().optional(),
     bashTimeoutMs: z.number().int().positive().finite().optional(),
+    codexBackendUrl: z.string().trim().min(1).optional(),
+    codexModel: z.string().trim().min(1).optional(),
   })
   .strict();
 
@@ -111,6 +113,13 @@ export function resolveConfig(overrides: ConfigOverrides = {}): AgentConfig {
     fileConfig.bashTimeoutMs ??
     15000;
 
+  const codexBackendUrl =
+    process.env.JUNO_CODEX_BASE_URL ??
+    fileConfig.codexBackendUrl ??
+    'https://chatgpt.com/backend-api';
+  const codexModelOverride =
+    process.env.JUNO_CODEX_MODEL ?? fileConfig.codexModel;
+
   return {
     cwd,
     homeDir,
@@ -124,5 +133,7 @@ export function resolveConfig(overrides: ConfigOverrides = {}): AgentConfig {
     toolOutputLimit,
     readLineLimit,
     bashTimeoutMs,
+    codexBackendUrl,
+    codexModelOverride,
   };
 }

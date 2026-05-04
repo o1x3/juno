@@ -124,6 +124,16 @@ export type AgentConfig = {
   toolOutputLimit: number;
   readLineLimit: number;
   bashTimeoutMs: number;
+  codexBackendUrl: string;
+  codexModelOverride?: string;
+};
+
+export type AuthMode = 'api-key' | 'oauth-api-key' | 'oauth-codex' | 'none';
+
+export type ModelFallback = {
+  from: string;
+  to: string;
+  source: 'fresh' | 'cache' | 'static';
 };
 
 export type SessionSummary = {
@@ -150,9 +160,15 @@ export type ModelClient = {
   }): Promise<ModelStep>;
 };
 
-export type AgentTurnResult = {
+export type RawAgentTurnResult = {
   assistantText: string;
   toolCalls: ToolCall[];
   toolResults: ToolResult[];
   messages: SerializedMessage[];
+};
+
+export type AgentTurnResult = RawAgentTurnResult & {
+  authMode: AuthMode;
+  activeModel: string;
+  modelFallback?: ModelFallback;
 };

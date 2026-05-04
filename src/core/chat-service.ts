@@ -1,6 +1,12 @@
-import { createApiKeyCredential } from '@/auth/codex';
-import { loadCredential, resolveCredential } from '@/auth/storage';
+import { createApiKeyCredential, extractAccountIdFromJwt } from '@/auth/codex';
+import {
+  loadCredential,
+  refreshCredentialIfNearExpiry,
+  resolveCredential,
+} from '@/auth/storage';
 import { runAgentTurn } from '@/core/agent-loop';
+import { discoverCodexModels, pickCodexModel } from '@/core/codex-models';
+import { createCodexResponsesClient } from '@/core/codex-responses-client';
 import { loadProjectInstructions } from '@/core/instructions';
 import { createAiSdkModelClient } from '@/core/model-client';
 import { buildSystemPrompt } from '@/core/prompt';
@@ -11,7 +17,13 @@ import {
   restoreMessages,
 } from '@/core/session-store';
 import { createBuiltinTools } from '@/core/tools';
-import type { AgentConfig, AgentTurnResult } from '@/types';
+import type {
+  AgentConfig,
+  AgentTurnResult,
+  AuthMode,
+  ModelClient,
+  ModelFallback,
+} from '@/types';
 
 type ChatOptions = {
   config: AgentConfig;
@@ -25,6 +37,97 @@ type ChatOptions = {
     ? (result: T) => void
     : never;
 };
+
+type RoutingResolution = {
+  runtimeConfig: AgentConfig;
+  modelClient: ModelClient;
+  authMode: AuthMode;
+  activeModel: string;
+  modelFallback?: ModelFallback;
+};
+
+async function resolveRouting(config: AgentConfig): Promise<RoutingResolution> {
+  const stored = await loadCredential(config.authFile);
+  const refreshed = await refreshCredentialIfNearExpiry(
+    config.authFile,
+    stored,
+  ).catch((error: unknown) => {
+    process.stderr.write(
+      `Warning: OAuth refresh failed: ${error instanceof Error ? error.message : String(error)}\n`,
+    );
+    return stored;
+  });
+  const credential = resolveCredential(config.apiKey, refreshed);
+
+  if (credential?.type === 'api-key') {
+    return {
+      runtimeConfig: { ...config, apiKey: credential.apiKey },
+      modelClient: createAiSdkModelClient({
+        ...config,
+        apiKey: credential.apiKey,
+      }),
+      authMode: 'api-key',
+      activeModel: config.model,
+    };
+  }
+
+  if (credential?.type === 'oauth' && credential.apiKey) {
+    return {
+      runtimeConfig: { ...config, apiKey: credential.apiKey },
+      modelClient: createAiSdkModelClient({
+        ...config,
+        apiKey: credential.apiKey,
+      }),
+      authMode: 'oauth-api-key',
+      activeModel: config.model,
+    };
+  }
+
+  if (credential?.type === 'oauth') {
+    const accountId =
+      credential.accountId ??
+      extractAccountIdFromJwt(credential.accessToken) ??
+      '';
+    const registry = await discoverCodexModels({ homeDir: config.homeDir });
+    const choice = pickCodexModel(
+      config.model,
+      config.codexModelOverride,
+      registry,
+    );
+    const runtimeConfig: AgentConfig = {
+      ...config,
+      apiKey: undefined,
+      model: choice.model,
+    };
+    const modelClient = createCodexResponsesClient({
+      baseUrl: config.codexBackendUrl,
+      accessToken: credential.accessToken,
+      accountId,
+    });
+    return {
+      runtimeConfig,
+      modelClient,
+      authMode: 'oauth-codex',
+      activeModel: choice.model,
+      modelFallback: choice.fallbackFrom
+        ? { from: choice.fallbackFrom, to: choice.model, source: choice.source }
+        : undefined,
+    };
+  }
+
+  if (config.apiKey) {
+    return {
+      runtimeConfig: config,
+      modelClient: createAiSdkModelClient(config),
+      authMode: 'api-key',
+      activeModel: config.model,
+    };
+  }
+
+  throw new Error(
+    'No credential available. Run `juno login` or set OPENAI_API_KEY.',
+  );
+}
 
 export async function startOrResumeChat(
   options: ChatOptions,
@@ -47,42 +150,54 @@ export async function startOrResumeChat(
     });
   }
 
-  const stored = await loadCredential(config.authFile);
-  const credential = resolveCredential(config.apiKey, stored);
-  const runtimeConfig: AgentConfig =
-    credential?.type === 'api-key'
-      ? { ...config, apiKey: credential.apiKey }
-      : credential?.type === 'oauth' && credential.apiKey
-        ? { ...config, apiKey: credential.apiKey }
-        : config.apiKey
-          ? config
-          : {
-              ...config,
-              apiKey: undefined,
-            };
+  const routing = await resolveRouting(config);
 
   const instructions = await loadProjectInstructions(config.cwd);
   const systemPrompt = buildSystemPrompt(instructions);
-  const modelClient = createAiSdkModelClient(runtimeConfig);
   const result = await runAgentTurn({
-    config: runtimeConfig,
+    config: routing.runtimeConfig,
     sessionId,
     systemPrompt,
     userInput: options.prompt,
     messages,
     tools: createBuiltinTools({
-      cwd: runtimeConfig.cwd,
-      outputLimit: runtimeConfig.toolOutputLimit,
-      readLineLimit: runtimeConfig.readLineLimit,
-      bashTimeoutMs: runtimeConfig.bashTimeoutMs,
+      cwd: routing.runtimeConfig.cwd,
+      outputLimit: routing.runtimeConfig.toolOutputLimit,
+      readLineLimit: routing.runtimeConfig.readLineLimit,
+      bashTimeoutMs: routing.runtimeConfig.bashTimeoutMs,
     }),
-    modelClient,
+    modelClient: routing.modelClient,
     onTextDelta: options.onTextDelta,
     onToolCall: options.onToolCall as never,
     onToolResult: options.onToolResult as never,
   });
 
-  return { sessionId, result };
+  return {
+    sessionId,
+    result: {
+      ...result,
+      authMode: routing.authMode,
+      activeModel: routing.activeModel,
+      modelFallback: routing.modelFallback,
+    },
+  };
+}
+
+export async function resolveAuthSummary(config: AgentConfig): Promise<{
+  authMode: AuthMode;
+  activeModel: string;
+  modelFallback?: ModelFallback;
+}> {
+  try {
+    const routing = await resolveRouting(config);
+    return {
+      authMode: routing.authMode,
+      activeModel: routing.activeModel,
+      modelFallback: routing.modelFallback,
+    };
+  } catch {
+    return { authMode: 'none', activeModel: config.model };
+  }
 }
 
 export function normalizeApiKey(value: string): string {

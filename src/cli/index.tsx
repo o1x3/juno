@@ -35,6 +35,12 @@ const chatCommand = defineCommand({
       });
       process.stdout.write(`${result.assistantText}\n`);
       process.stdout.write(`session: ${sessionId}\n`);
+      process.stdout.write(`auth: ${result.authMode}\n`);
+      const fallback = result.modelFallback;
+      const fallbackTag = fallback
+        ? ` (was ${fallback.from}${fallback.source === 'static' ? '; offline-fallback' : ''})`
+        : '';
+      process.stdout.write(`model: ${result.activeModel}${fallbackTag}\n`);
       return;
     }
 
@@ -93,7 +99,7 @@ const loginCommand = defineCommand({
     process.stdout.write(`Stored OAuth credential in ${config.authFile}\n`);
     if (!credential.apiKey) {
       process.stdout.write(
-        'OAuth completed, but API-key exchange was unavailable. Set OPENAI_API_KEY if model calls fail.\n',
+        'API-key exchange unavailable. Calls will route via the ChatGPT Codex backend using your OAuth credential.\n',
       );
     }
   },

@@ -84,11 +84,13 @@ Flags (mutually exclusive — first match wins):
 - `--browser` — starts a localhost OAuth listener on port `1455`, prints the authorize URL, and waits for the callback. Does **not** auto-open the browser.
 - `--device-auth` — requests a device code from `https://auth.openai.com/api/accounts`, prints the verification URL and user code, then polls until you complete it.
 
-After OAuth/device flows, Juno also tries to exchange the `id_token` for an OpenAI API key via the token-exchange grant. If that exchange fails the OAuth credential is still stored, but the CLI prints:
+After OAuth/device flows, Juno also tries to exchange the `id_token` for an OpenAI API key via the token-exchange grant. If that exchange fails the CLI prints:
 
-> `OAuth completed, but API-key exchange was unavailable. Set OPENAI_API_KEY if model calls fail.`
+> `API-key exchange unavailable. Calls will route via the ChatGPT Codex backend using your OAuth credential.`
 
-In that case you must export `OPENAI_API_KEY` for `juno chat` to actually call the model.
+OAuth-only credentials are then routed to `https://chatgpt.com/backend-api/codex/responses` using the `access_token` as a Bearer header (and `chatgpt-account-id` extracted from the JWT). The configured model is checked against a dynamic registry pulled from `https://models.dev/api.json` (`openai` provider, `family: "gpt-codex"`, `tool_call: true`); if it isn't a Codex-backend model, the cheapest known one is used and the UI shows `model=<chosen> (was <original>)`. Override the chosen model with `JUNO_CODEX_MODEL` or `codexModel` in `config.json`.
+
+Token refresh runs on every chat turn when the stored `expiresAt` is within 5 minutes, posting `grant_type=refresh_token` to `https://auth.openai.com/oauth/token` and persisting the new tuple back to `auth.json`.
 
 ### `juno logout`
 
@@ -137,6 +139,8 @@ Resolution lives in [src/core/config.ts](src/core/config.ts).
 | `JUNO_OPENAI_AUTHORIZE_URL` | Override OAuth authorize URL. | `https://auth.openai.com/oauth/authorize` |
 | `JUNO_OPENAI_TOKEN_URL` | Override OAuth token URL. | `https://auth.openai.com/oauth/token` |
 | `JUNO_OPENAI_DEVICE_ACCOUNTS_URL` | Override device-auth base URL. | `https://auth.openai.com/api/accounts` |
+| `JUNO_CODEX_BASE_URL` | Override the ChatGPT Codex backend base URL used for OAuth-only credentials. | `https://chatgpt.com/backend-api` |
+| `JUNO_CODEX_MODEL` | Pin the model used on the Codex backend (OAuth-only path). Bypasses the dynamic registry. | discovered cheapest |
 
 Integer-valued env vars are validated. A non-positive-integer value (e.g. `JUNO_MAX_STEPS=foo`) raises:
 
@@ -156,6 +160,8 @@ The schema is **strict** (unknown keys are rejected). Supported keys:
 | `toolOutputLimit` | positive int | Same as `JUNO_TOOL_OUTPUT_LIMIT`. |
 | `readLineLimit` | positive int | Same as `JUNO_READ_LINE_LIMIT`. |
 | `bashTimeoutMs` | positive int | Same as `JUNO_BASH_TIMEOUT_MS`. |
+| `codexBackendUrl` | string | Same as `JUNO_CODEX_BASE_URL`. |
+| `codexModel` | string | Same as `JUNO_CODEX_MODEL`. |
 
 Example `~/.juno/config.json`:
 

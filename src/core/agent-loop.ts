@@ -1,9 +1,9 @@
 import { appendSessionEvent } from '@/core/session-store';
 import type {
   AgentConfig,
-  AgentTurnResult,
   ModelClient,
   ProjectInstructionSet,
+  RawAgentTurnResult,
   SerializedMessage,
   ToolCall,
   ToolResult,
@@ -25,7 +25,7 @@ type TurnOptions = {
 
 export async function runAgentTurn(
   options: TurnOptions,
-): Promise<AgentTurnResult> {
+): Promise<RawAgentTurnResult> {
   const {
     config,
     sessionId,

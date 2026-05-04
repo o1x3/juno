@@ -35,7 +35,9 @@ type TokenPayload = {
   expires_in?: number;
 };
 
-function readAccountIdFromJwt(jwt: string | undefined): string | undefined {
+export function extractAccountIdFromJwt(
+  jwt: string | undefined,
+): string | undefined {
   if (!jwt) {
     return undefined;
   }
@@ -112,7 +114,9 @@ async function exchangeCode(
     expiresAt: payload.expires_in
       ? new Date(Date.now() + payload.expires_in * 1000).toISOString()
       : undefined,
-    accountId: readAccountIdFromJwt(payload.id_token),
+    accountId:
+      extractAccountIdFromJwt(payload.id_token) ??
+      extractAccountIdFromJwt(payload.access_token),
     createdAt: new Date().toISOString(),
   };
 }
@@ -245,6 +249,53 @@ async function pollDeviceCode(
       `Device auth failed: ${response.status} ${await response.text()}`,
     );
   }
+}
+
+export async function refreshOAuthCredential(
+  current: CredentialRecord & { type: 'oauth' },
+): Promise<CredentialRecord> {
+  if (!current.refreshToken) {
+    throw new Error(
+      'OAuth credential has no refresh token; re-run `juno login`',
+    );
+  }
+
+  const response = await fetch(TOKEN_URL, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'refresh_token',
+      refresh_token: current.refreshToken,
+      client_id: CLIENT_ID,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `OAuth token refresh failed: ${response.status} ${await response.text()}`,
+    );
+  }
+
+  const payload = (await response.json()) as TokenPayload;
+  if (!payload.access_token) {
+    throw new Error('OAuth token refresh returned no access_token');
+  }
+
+  return {
+    provider: 'codex',
+    type: 'oauth',
+    apiKey: current.apiKey,
+    accessToken: payload.access_token,
+    refreshToken: payload.refresh_token ?? current.refreshToken,
+    expiresAt: payload.expires_in
+      ? new Date(Date.now() + payload.expires_in * 1000).toISOString()
+      : undefined,
+    accountId:
+      extractAccountIdFromJwt(payload.id_token) ??
+      extractAccountIdFromJwt(payload.access_token) ??
+      current.accountId,
+    createdAt: current.createdAt,
+  };
 }
 
 export async function loginWithDeviceCode(): Promise<{

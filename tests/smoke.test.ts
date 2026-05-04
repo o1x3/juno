@@ -33,6 +33,7 @@ describe('smoke path', () => {
       toolOutputLimit: 1000,
       readLineLimit: 50,
       bashTimeoutMs: 1000,
+      codexBackendUrl: 'https://chatgpt.com/backend-api',
     };
 
     const instructions = await loadProjectInstructions(workspace);

@@ -30,6 +30,7 @@ describe('agent loop', () => {
       toolOutputLimit: 1000,
       readLineLimit: 50,
       bashTimeoutMs: 1000,
+      codexBackendUrl: 'https://chatgpt.com/backend-api',
     };
 
     let callCount = 0;
