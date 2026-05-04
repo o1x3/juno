@@ -19,11 +19,20 @@ async function seedCodexModelsCache(homeDir: string): Promise<void> {
       fetchedAt: Date.now(),
       models: [
         {
+          // Cheapest in the registry but NOT supported on the ChatGPT-account
+          // backend — must never be auto-selected for OAuth-Codex routing.
           id: 'gpt-5.1-codex-mini',
           inputCost: 0.25,
           outputCost: 2,
           reasoning: true,
           contextLimit: 400000,
+        },
+        {
+          id: 'gpt-5.4-mini',
+          inputCost: 0.75,
+          outputCost: 4.5,
+          reasoning: true,
+          contextLimit: 272000,
         },
       ],
     }),
@@ -70,7 +79,7 @@ describe('resolveAuthSummary', () => {
     expect(summary.modelFallback).toBeUndefined();
   });
 
-  test('reports oauth-codex with fallback when only OAuth credential is stored and configured model is non-codex', async () => {
+  test('reports oauth-codex routed to a safe default model, never the cheapest unsafe one', async () => {
     await saveCredential(join(workspace, 'auth.json'), {
       provider: 'codex',
       type: 'oauth',
@@ -83,8 +92,12 @@ describe('resolveAuthSummary', () => {
     const config = makeConfig();
     const summary = await resolveAuthSummary(config);
     expect(summary.authMode).toBe('oauth-codex');
-    expect(summary.modelFallback).toBeDefined();
-    expect(summary.modelFallback?.from).toBe('gpt-5.4-mini');
+    // The configured model `gpt-5.4-mini` is in the seeded cache and is
+    // ChatGPT-account-safe, so it should be picked verbatim. Critically,
+    // gpt-5.1-codex-mini (cheapest in the cache) must not appear.
+    expect(summary.activeModel).toBe('gpt-5.4-mini');
+    expect(summary.activeModel).not.toBe('gpt-5.1-codex-mini');
+    expect(summary.modelFallback).toBeUndefined();
   });
 
   test('reports none when no credential available', async () => {

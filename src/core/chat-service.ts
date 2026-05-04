@@ -5,7 +5,10 @@ import {
   resolveCredential,
 } from '@/auth/storage';
 import { runAgentTurn } from '@/core/agent-loop';
-import { discoverCodexModels, pickCodexModel } from '@/core/codex-models';
+import {
+  discoverCodexModels,
+  pickCodexModelForChatGptAccount,
+} from '@/core/codex-models';
 import { createCodexResponsesClient } from '@/core/codex-responses-client';
 import { loadProjectInstructions } from '@/core/instructions';
 import { createAiSdkModelClient } from '@/core/model-client';
@@ -92,7 +95,7 @@ async function resolveRouting(config: AgentConfig): Promise<RoutingResolution> {
       );
     }
     const registry = await discoverCodexModels({ homeDir: config.homeDir });
-    const choice = pickCodexModel(
+    const choice = pickCodexModelForChatGptAccount(
       config.model,
       config.codexModelOverride,
       registry,

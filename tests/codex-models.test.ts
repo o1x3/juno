@@ -5,7 +5,9 @@ import { join } from 'node:path';
 
 import {
   discoverCodexModels,
+  isChatGptAccountSafeModel,
   pickCodexModel,
+  pickCodexModelForChatGptAccount,
   pickDefaultCodexModel,
   resetCodexRegistryCache,
 } from '@/core/codex-models';
@@ -210,5 +212,118 @@ describe('pickCodexModel', () => {
     const choice = pickCodexModel('gpt-5.4-mini', undefined, registry);
     expect(choice.model).toBe('gpt-5.1-codex-mini');
     expect(choice.fallbackFrom).toBe('gpt-5.4-mini');
+  });
+});
+
+describe('isChatGptAccountSafeModel', () => {
+  test('accepts the explicit allowlist', () => {
+    for (const id of [
+      'gpt-5.5',
+      'gpt-5.4',
+      'gpt-5.4-mini',
+      'gpt-5.3-codex',
+      'gpt-5.3-codex-spark',
+      'gpt-5.2',
+    ]) {
+      expect(isChatGptAccountSafeModel(id)).toBe(true);
+    }
+  });
+
+  test('rejects gpt-5.1-codex-mini which the backend rejects on ChatGPT accounts', () => {
+    expect(isChatGptAccountSafeModel('gpt-5.1-codex-mini')).toBe(false);
+  });
+
+  test('accepts future gpt-X.Y slugs where X.Y > 5.4', () => {
+    expect(isChatGptAccountSafeModel('gpt-5.6')).toBe(true);
+    expect(isChatGptAccountSafeModel('gpt-6.0-codex')).toBe(true);
+  });
+});
+
+describe('pickCodexModelForChatGptAccount', () => {
+  const mixedRegistry = {
+    models: [
+      {
+        id: 'gpt-5.1-codex-mini',
+        inputCost: 0.25,
+        outputCost: 2,
+        reasoning: true,
+        contextLimit: 400000,
+      },
+      {
+        id: 'gpt-5.4-mini',
+        inputCost: 0.75,
+        outputCost: 4.5,
+        reasoning: true,
+        contextLimit: 272000,
+      },
+      {
+        id: 'gpt-5.3-codex',
+        inputCost: 1.75,
+        outputCost: 14,
+        reasoning: true,
+        contextLimit: 272000,
+      },
+    ],
+    source: 'fresh' as const,
+  };
+
+  test('keeps configured safe model even when an unsafe cheaper model exists', () => {
+    expect(
+      pickCodexModelForChatGptAccount('gpt-5.4-mini', undefined, mixedRegistry),
+    ).toEqual({ model: 'gpt-5.4-mini', source: 'fresh' });
+  });
+
+  test('falls back to cheapest SAFE model when configured model is not in registry — never picks gpt-5.1-codex-mini', () => {
+    const choice = pickCodexModelForChatGptAccount(
+      'gpt-not-in-registry',
+      undefined,
+      mixedRegistry,
+    );
+    expect(choice.model).toBe('gpt-5.4-mini');
+    expect(choice.model).not.toBe('gpt-5.1-codex-mini');
+    expect(choice.fallbackFrom).toBe('gpt-not-in-registry');
+  });
+
+  test('rewrites unsafe configured model to a safe one', () => {
+    const choice = pickCodexModelForChatGptAccount(
+      'gpt-5.1-codex-mini',
+      undefined,
+      mixedRegistry,
+    );
+    expect(choice.model).toBe('gpt-5.4-mini');
+    expect(choice.fallbackFrom).toBe('gpt-5.1-codex-mini');
+  });
+
+  test('honors override unconditionally so user-pinned slugs surface backend errors verbatim', () => {
+    expect(
+      pickCodexModelForChatGptAccount(
+        'gpt-5.4-mini',
+        'gpt-5.1-codex-mini',
+        mixedRegistry,
+      ),
+    ).toEqual({ model: 'gpt-5.1-codex-mini', source: 'fresh' });
+  });
+
+  test('falls back to literal gpt-5.4-mini when registry has no safe models at all', () => {
+    const onlyUnsafe = {
+      models: [
+        {
+          id: 'gpt-5.1-codex-mini',
+          inputCost: 0.25,
+          outputCost: 2,
+          reasoning: true,
+          contextLimit: 400000,
+        },
+      ],
+      source: 'static' as const,
+    };
+    const choice = pickCodexModelForChatGptAccount(
+      'gpt-5.4-mini',
+      undefined,
+      onlyUnsafe,
+    );
+    expect(choice.model).toBe('gpt-5.4-mini');
+    expect(choice.fallbackFrom).toBe('gpt-5.4-mini');
+    expect(choice.source).toBe('static');
   });
 });

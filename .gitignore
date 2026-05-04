@@ -7,7 +7,6 @@ coverage/
 .cache/
 .tmp/
 tmp/
-ref/
 *.log
 .env
 .env.*

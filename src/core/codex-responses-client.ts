@@ -206,7 +206,11 @@ type CodexErrorPayload = {
     plan_type?: string;
     resets_at?: number;
   };
+  detail?: string;
 };
+
+const CHATGPT_ACCOUNT_SAFE_MODEL_HINT =
+  'gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.3-codex, gpt-5.2';
 
 function friendlyError(status: number, raw: string): Error {
   let message = raw || 'Codex request failed';
@@ -230,8 +234,16 @@ function friendlyError(status: number, raw: string): Error {
       }
       message = err.message ?? message;
     }
+    if (typeof parsed.detail === 'string' && parsed.detail.length > 0) {
+      message = parsed.detail;
+    }
   } catch {
     // ignore json parse errors and use the raw text
+  }
+  if (/not supported when using Codex with a ChatGPT account/i.test(message)) {
+    return new Error(
+      `${message} Try one of: ${CHATGPT_ACCOUNT_SAFE_MODEL_HINT} — or unset JUNO_CODEX_MODEL to let juno pick a safe default.`,
+    );
   }
   return new Error(`Codex backend error ${status}: ${message}`);
 }

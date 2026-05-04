@@ -25,38 +25,34 @@ const MODELS_DEV_URL = 'https://models.dev/api.json';
 const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 3000;
 
+// Models known to be accepted by the ChatGPT-account Codex backend.
+// Sourced from ref/opencode/packages/opencode/src/plugin/codex.ts and the
+// upstream Codex CLI bundled catalog (ref/codex/codex-rs/models-manager/models.json).
+// Older slugs like gpt-5.1-codex-mini are intentionally excluded — the backend
+// returns 400 "not supported when using Codex with a ChatGPT account" for them.
+export const CHATGPT_ACCOUNT_SAFE_MODELS: ReadonlySet<string> = new Set([
+  'gpt-5.5',
+  'gpt-5.4',
+  'gpt-5.4-mini',
+  'gpt-5.3-codex',
+  'gpt-5.3-codex-spark',
+  'gpt-5.2',
+]);
+
+export function isChatGptAccountSafeModel(id: string): boolean {
+  if (CHATGPT_ACCOUNT_SAFE_MODELS.has(id)) return true;
+  const match = id.match(/^gpt-(\d+\.\d+)/);
+  return match ? Number.parseFloat(match[1] ?? '0') > 5.4 : false;
+}
+
 const STATIC_FALLBACK: CodexModel[] = [
   {
-    id: 'gpt-5.1-codex-mini',
-    inputCost: 0.25,
-    outputCost: 2,
-    cacheReadCost: 0.025,
+    id: 'gpt-5.4-mini',
+    inputCost: 0.75,
+    outputCost: 4.5,
+    cacheReadCost: 0.075,
     reasoning: true,
-    contextLimit: 400000,
-  },
-  {
-    id: 'gpt-5.1-codex',
-    inputCost: 1.25,
-    outputCost: 10,
-    cacheReadCost: 0.125,
-    reasoning: true,
-    contextLimit: 400000,
-  },
-  {
-    id: 'gpt-5.1-codex-max',
-    inputCost: 1.25,
-    outputCost: 10,
-    cacheReadCost: 0.125,
-    reasoning: true,
-    contextLimit: 400000,
-  },
-  {
-    id: 'gpt-5.2-codex',
-    inputCost: 1.75,
-    outputCost: 14,
-    cacheReadCost: 0.175,
-    reasoning: true,
-    contextLimit: 400000,
+    contextLimit: 272000,
   },
   {
     id: 'gpt-5.3-codex',
@@ -64,7 +60,15 @@ const STATIC_FALLBACK: CodexModel[] = [
     outputCost: 14,
     cacheReadCost: 0.175,
     reasoning: true,
-    contextLimit: 400000,
+    contextLimit: 272000,
+  },
+  {
+    id: 'gpt-5.4',
+    inputCost: 2.5,
+    outputCost: 15,
+    cacheReadCost: 0.25,
+    reasoning: true,
+    contextLimit: 272000,
   },
 ];
 
@@ -224,6 +228,45 @@ export function pickCodexModel(
   }
   return {
     model: pickDefaultCodexModel(registry.models),
+    fallbackFrom: configuredModel,
+    source: registry.source,
+  };
+}
+
+// Picker for OAuth credentials that route through the ChatGPT-account Codex
+// backend. Filters the registry down to models the backend actually accepts;
+// honors an explicit override verbatim so a user-pinned slug surfaces a clear
+// backend error rather than getting silently rewritten.
+export function pickCodexModelForChatGptAccount(
+  configuredModel: string,
+  override: string | undefined,
+  registry: CodexRegistry,
+): CodexModelChoice {
+  if (override && override.trim().length > 0) {
+    return { model: override, source: registry.source };
+  }
+
+  const safeModels = registry.models.filter((model) =>
+    isChatGptAccountSafeModel(model.id),
+  );
+
+  if (
+    isChatGptAccountSafeModel(configuredModel) &&
+    isCodexModel(configuredModel, safeModels)
+  ) {
+    return { model: configuredModel, source: registry.source };
+  }
+
+  if (safeModels.length === 0) {
+    return {
+      model: 'gpt-5.4-mini',
+      fallbackFrom: configuredModel,
+      source: registry.source,
+    };
+  }
+
+  return {
+    model: pickDefaultCodexModel(safeModels),
     fallbackFrom: configuredModel,
     source: registry.source,
   };
