@@ -64,7 +64,9 @@ function parsePositiveIntEnv(
   }
 
   if (!/^[1-9]\d*$/.test(value)) {
-    throw new Error(`Invalid environment variable ${name}: expected a positive integer`);
+    throw new Error(
+      `Invalid environment variable ${name}: expected a positive integer`,
+    );
   }
 
   return Number.parseInt(value, 10);
@@ -72,7 +74,8 @@ function parsePositiveIntEnv(
 
 export function resolveConfig(overrides: ConfigOverrides = {}): AgentConfig {
   const homeDir = process.env.JUNO_HOME ?? DEFAULT_HOME_DIR;
-  const configFile = process.env.JUNO_CONFIG ?? join(homeDir, DEFAULT_CONFIG_FILE);
+  const configFile =
+    process.env.JUNO_CONFIG ?? join(homeDir, DEFAULT_CONFIG_FILE);
   const fileConfig = loadConfigFile(configFile);
   const cwd = overrides.cwd ?? process.cwd();
   const model =
