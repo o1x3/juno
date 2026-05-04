@@ -1,0 +1,73 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Resolve version
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and package binaries
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          targets=(
+            "darwin x64"
+            "darwin arm64"
+            "linux x64"
+            "linux arm64"
+          )
+          for entry in "${targets[@]}"; do
+            os="${entry% *}"
+            arch="${entry#* }"
+            stage="build/${os}-${arch}"
+            mkdir -p "$stage"
+            echo "==> compiling bun-${os}-${arch}"
+            bun build ./src/cli/index.tsx \
+              --compile \
+              --target="bun-${os}-${arch}" \
+              --outfile "${stage}/juno"
+            tar -czf "dist/juno-${VERSION}-${os}-${arch}.tar.gz" -C "$stage" juno
+          done
+          ls -la dist
+
+      - name: Smoke test (linux x64 binary)
+        run: ./build/linux-x64/juno --help
+
+      - name: Generate checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum juno-*.tar.gz > checksums.txt
+          cat checksums.txt
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            dist/juno-*.tar.gz
+            dist/checksums.txt
+          generate_release_notes: true

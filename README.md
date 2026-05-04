@@ -37,10 +37,24 @@ Known limitations (do not assume parity with Codex/Claude Code):
 
 ## Install
 
+### From a release (recommended)
+
+The fastest way to install the latest tagged build:
+
+```sh
+curl -sSfL https://raw.githubusercontent.com/o1x3/juno/main/scripts/install.sh | sh
+```
+
+The script detects your OS/arch (macOS or Linux, x64 or arm64), downloads the matching tarball from the latest GitHub release, verifies its SHA-256 against `checksums.txt`, and drops the binary at `/usr/local/bin/juno`. macOS users have the Gatekeeper quarantine attribute stripped automatically.
+
+If you prefer a manual install: grab `juno-<version>-<os>-<arch>.tar.gz` plus `checksums.txt` from the [releases page](https://github.com/o1x3/juno/releases), verify the checksum, extract, `chmod +x juno`, and move it to `/usr/local/bin/juno`. On macOS you may need `xattr -dr com.apple.quarantine /usr/local/bin/juno`.
+
+### From source
+
 Clone, install dependencies, and either run from source or compile a single binary.
 
 ```sh
-git clone <this repo>
+git clone https://github.com/o1x3/juno.git
 cd juno
 bun install
 
@@ -211,6 +225,32 @@ bun run build:compile # standalone binary at dist/juno
 ```
 
 The end-of-turn checklist in [AGENTS.md](AGENTS.md) requires updating `docs/TODO.md`, running tests, running lint/typecheck on material code changes, and rebuilding `dist/juno` if the runtime changed.
+
+## Continuous integration
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every push to `main` and every pull request targeting `main`. It uses [`oven-sh/setup-bun`](https://github.com/oven-sh/setup-bun) on `ubuntu-latest` and runs, in order:
+
+```sh
+bun install --frozen-lockfile
+bun run check
+bun run typecheck
+bun test
+```
+
+## Cutting a release
+
+Releases are tag-driven. Pushing a tag matching `v*` triggers [`.github/workflows/release.yml`](.github/workflows/release.yml), which cross-compiles four binaries from a single Linux runner using `bun build --compile --target=...` (`darwin-x64`, `darwin-arm64`, `linux-x64`, `linux-arm64`), packages each as `juno-<version>-<os>-<arch>.tar.gz` (with the inner binary named plain `juno`), generates a `checksums.txt`, smoke-tests the Linux x64 build with `--help`, and uploads everything to the GitHub release.
+
+To cut a release:
+
+```sh
+bun run release patch    # or: minor, major, or an explicit tag like v1.2.3
+# equivalent: ./scripts/release.sh patch
+```
+
+The script refuses to run unless the working tree is clean, you are on `main`, and `HEAD` matches `origin/main`. It computes the next semver from the most recent reachable `v*` tag (bootstrapping from `v0.1.0` if no tags exist), prompts for confirmation, then `git tag` + `git push origin <tag>`. Tags are unsigned for now.
+
+After the workflow finishes, users can install with the one-liner from [Install from a release](#from-a-release-recommended).
 
 ## Troubleshooting
 
