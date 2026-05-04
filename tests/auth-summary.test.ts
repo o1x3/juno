@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -9,6 +9,26 @@ import { resetCodexRegistryCache } from '@/core/codex-models';
 import type { AgentConfig } from '@/types';
 
 let workspace = '';
+
+async function seedCodexModelsCache(homeDir: string): Promise<void> {
+  const dir = join(homeDir, 'cache');
+  await mkdir(dir, { recursive: true });
+  await writeFile(
+    join(dir, 'codex-models.json'),
+    JSON.stringify({
+      fetchedAt: Date.now(),
+      models: [
+        {
+          id: 'gpt-5.1-codex-mini',
+          inputCost: 0.25,
+          outputCost: 2,
+          reasoning: true,
+          contextLimit: 400000,
+        },
+      ],
+    }),
+  );
+}
 
 function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   return {
@@ -30,6 +50,7 @@ function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
 beforeEach(async () => {
   resetCodexRegistryCache();
   workspace = await mkdtemp(join(tmpdir(), 'juno-routing-'));
+  await seedCodexModelsCache(workspace);
 });
 
 afterEach(async () => {
