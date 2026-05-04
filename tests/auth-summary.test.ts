@@ -72,6 +72,24 @@ describe('resolveAuthSummary', () => {
     expect(summary.authMode).toBe('none');
   });
 
+  test('reports none when an OAuth credential is missing both accountId and a JWT claim for it', async () => {
+    await saveCredential(join(workspace, 'auth.json'), {
+      provider: 'codex',
+      type: 'oauth',
+      accessToken: 'not-a-jwt',
+      refreshToken: 'rt',
+      accountId: undefined,
+      expiresAt: new Date(Date.now() + 3600 * 1000).toISOString(),
+      createdAt: new Date().toISOString(),
+    });
+    const config = makeConfig();
+    const summary = await resolveAuthSummary(config);
+    // resolveAuthSummary swallows errors into 'none' so the UI can still
+    // render. The underlying routing must throw rather than send an empty
+    // chatgpt-account-id header.
+    expect(summary.authMode).toBe('none');
+  });
+
   test('reports oauth-api-key when oauth credential carries an exchanged api key', async () => {
     await saveCredential(join(workspace, 'auth.json'), {
       provider: 'codex',

@@ -48,15 +48,15 @@ type RoutingResolution = {
 
 async function resolveRouting(config: AgentConfig): Promise<RoutingResolution> {
   const stored = await loadCredential(config.authFile);
-  const refreshed = await refreshCredentialIfNearExpiry(
-    config.authFile,
-    stored,
-  ).catch((error: unknown) => {
-    process.stderr.write(
-      `Warning: OAuth refresh failed: ${error instanceof Error ? error.message : String(error)}\n`,
+  let refreshed: typeof stored;
+  try {
+    refreshed = await refreshCredentialIfNearExpiry(config.authFile, stored);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `OAuth credential is near expiry and refresh failed: ${reason}. Re-run \`juno login\`.`,
     );
-    return stored;
-  });
+  }
   const credential = resolveCredential(config.apiKey, refreshed);
 
   if (credential?.type === 'api-key') {
@@ -85,9 +85,12 @@ async function resolveRouting(config: AgentConfig): Promise<RoutingResolution> {
 
   if (credential?.type === 'oauth') {
     const accountId =
-      credential.accountId ??
-      extractAccountIdFromJwt(credential.accessToken) ??
-      '';
+      credential.accountId ?? extractAccountIdFromJwt(credential.accessToken);
+    if (!accountId) {
+      throw new Error(
+        'Stored OAuth credential is missing a ChatGPT account id and the access_token JWT did not contain one. Re-run `juno login`.',
+      );
+    }
     const registry = await discoverCodexModels({ homeDir: config.homeDir });
     const choice = pickCodexModel(
       config.model,

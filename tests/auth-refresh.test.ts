@@ -72,6 +72,30 @@ describe('refreshCredentialIfNearExpiry', () => {
     }
   });
 
+  test('propagates the refresher error when within skew', async () => {
+    workspace = await mkdtemp(join(tmpdir(), 'juno-refresh-'));
+    const authFile = join(workspace, 'auth.json');
+    const now = Date.UTC(2026, 0, 1);
+    const cred = baseOauth(30, now);
+    let calls = 0;
+    let persistCalls = 0;
+    await expect(
+      refreshCredentialIfNearExpiry(authFile, cred, {
+        nowMs: now,
+        skewMs: 60 * 1000,
+        refresher: async () => {
+          calls += 1;
+          throw new Error('refresh denied');
+        },
+        persist: async () => {
+          persistCalls += 1;
+        },
+      }),
+    ).rejects.toThrow(/refresh denied/);
+    expect(calls).toBe(1);
+    expect(persistCalls).toBe(0);
+  });
+
   test('refreshes and persists when within skew', async () => {
     workspace = await mkdtemp(join(tmpdir(), 'juno-refresh-'));
     const authFile = join(workspace, 'auth.json');
