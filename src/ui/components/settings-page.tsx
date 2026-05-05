@@ -196,11 +196,20 @@ export function SettingsPage(props: SettingsPageProps) {
         setError(null);
         return;
       }
-      if (key.backspace) {
+      // Mac+Ink+Bun reports plain backspace (\x7f) as `key.delete`, not
+      // `key.backspace`. Treat both as backspace; same tradeoff documented
+      // for the composer.
+      if (key.backspace || key.delete) {
         setEditingText((e) => e.slice(0, -1));
         return;
       }
       if (input && !key.ctrl && !key.meta) {
+        // Filter raw control bytes (e.g. stray \x7f) so they aren't
+        // appended into the editing buffer.
+        if (input.length === 1) {
+          const code = input.charCodeAt(0);
+          if (code < 0x20 || code === 0x7f) return;
+        }
         setEditingText((e) => e + input);
       }
       return;

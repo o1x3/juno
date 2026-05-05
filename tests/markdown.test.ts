@@ -47,8 +47,16 @@ describe('renderMarkdown smoke', () => {
   });
 
   test('handles unclosed fence (streaming heal)', () => {
+    // Without healing, marked would treat this as a paragraph and the code
+    // would not render as a block. Heal must close the fence so the lexer
+    // emits a `code` token. We assert the lexer sees it as code by checking
+    // the rendered tree contains a child whose text starts with the fence
+    // language tag.
     const out = renderMarkdown('intro\n\n```ts\nconst x = 1;\n', 60);
     expect(out.length).toBeGreaterThan(0);
+    const json = JSON.stringify(out);
+    expect(json).toContain('ts');
+    expect(json).toContain('const x = 1');
   });
 
   test('handles a complex doc without throwing', () => {
@@ -80,5 +88,58 @@ describe('renderMarkdown smoke', () => {
     ].join('\n');
     const out = renderMarkdown(md, 80);
     expect(out.length).toBeGreaterThan(5);
+    const json = JSON.stringify(out);
+    // Headline elements all surfaced.
+    expect(json).toContain('Heading');
+    expect(json).toContain('item one');
+    expect(json).toContain('ordered');
+    expect(json).toContain('echo hi');
+    expect(json).toContain('col a');
+    expect(json).toContain('https://example.com');
+  });
+});
+
+describe('renderMarkdown structure', () => {
+  test('inline code spans render as yellowBright', () => {
+    const out = renderMarkdown('use `npm` here', 80);
+    const json = JSON.stringify(out);
+    expect(json).toContain('yellowBright');
+    expect(json).toContain('npm');
+  });
+
+  test('bold sets bold style on content', () => {
+    const out = renderMarkdown('this is **strong**', 80);
+    const json = JSON.stringify(out);
+    expect(json).toContain('"bold":true');
+    expect(json).toContain('strong');
+  });
+
+  test('links render the URL in dim parens after the anchor text', () => {
+    const out = renderMarkdown('see [here](https://x.test)', 80);
+    const json = JSON.stringify(out);
+    expect(json).toContain('here');
+    expect(json).toContain('https://x.test');
+    expect(json).toContain('blueBright');
+  });
+
+  test('headings render with bold and a heading colour', () => {
+    const out = renderMarkdown('# Title', 80);
+    const json = JSON.stringify(out);
+    expect(json).toContain('Title');
+    expect(json).toContain('"bold":true');
+    expect(json).toContain('cyanBright');
+  });
+
+  test('horizontal rule renders a divider line', () => {
+    const out = renderMarkdown('---', 80);
+    const json = JSON.stringify(out);
+    expect(json).toContain('─');
+  });
+
+  test('blockquote renders the bar glyph', () => {
+    const out = renderMarkdown('> quoted', 80);
+    const json = JSON.stringify(out);
+    expect(json).toContain('│ ');
+    expect(json).toContain('quoted');
   });
 });

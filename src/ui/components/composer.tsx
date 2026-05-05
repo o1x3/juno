@@ -1,6 +1,8 @@
+import { appendFileSync } from 'node:fs';
+
 import { Box, Text, useInput } from 'ink';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { softWrap } from '@/ui/format';
+import { wrapLine } from '@/ui/format';
 import { KillRing } from '@/ui/kill-ring';
 import { colors, type ThemeColor } from '@/ui/theme';
 import { UndoStack } from '@/ui/undo-stack';
@@ -200,20 +202,41 @@ export function Composer(props: ComposerProps) {
       if (process.env.JUNO_DEBUG_KEYS) {
         try {
           const hex = [...input]
-            .map((c) => c.charCodeAt(0).toString(16).padStart(2, '0'))
+            .map((ch) => ch.charCodeAt(0).toString(16).padStart(2, '0'))
             .join(' ');
           const flags = Object.entries(key)
             .filter(([_, v]) => v)
             .map(([k]) => k)
             .join(',');
-          import('node:fs').then((fs) => {
-            fs.appendFileSync(
-              '/tmp/juno-keys.log',
-              `${new Date().toISOString()} input.len=${input.length} hex=[${hex}] flags=${flags || 'none'}\n`,
-            );
-          });
+          appendFileSync(
+            '/tmp/juno-keys.log',
+            `${new Date().toISOString()} input.len=${input.length} hex=[${hex}] flags=${flags || 'none'}\n`,
+          );
         } catch {
           // ignore
+        }
+      }
+
+      // Paste detection. Ink batches consecutive bytes in a single useInput
+      // event — natural fast typing arrives as e.g. `input='as'`, real
+      // pastes arrive with hundreds of bytes. If the input is multi-byte
+      // and contains a newline OR control-sequence start, treat it as a
+      // paste so an embedded \n doesn't get interpreted as Enter (submit).
+      // We don't try to filter ANSI sequences here — the keypress parser
+      // already strips most; if any leak through, normalize-on-insert
+      // handles \r/\r\n.
+      if (
+        input.length > 1 &&
+        !key.ctrl &&
+        !key.meta &&
+        !key.return &&
+        !key.tab
+      ) {
+        const hasNewline = input.includes('\n') || input.includes('\r');
+        if (hasNewline || input.length > 4) {
+          lastActionRef.current = 'edit';
+          insertText(input);
+          return;
         }
       }
 
@@ -231,7 +254,6 @@ export function Composer(props: ComposerProps) {
       // delete (fn+delete on Mac, dedicated Delete on full keyboards)
       // already lives on `\x1b[3~` and is rare enough that being off by
       // one direction here is the right tradeoff.
-      const isDelete = false;
       const isAnyDelete = isBackspace || key.delete;
 
       // Cancel/exit: bubble up.
@@ -282,26 +304,15 @@ export function Composer(props: ComposerProps) {
         return;
       }
 
-      // Backspace: at empty composer + bash/palette mode → exit.
-      if (isAnyDelete || isDelete) {
+      // Backspace: at empty composer + bash/palette mode → exit. We do not
+      // implement forward-delete: under our terminal classification fix,
+      // both \x7f (Mac-keyboard "delete" = logical backspace) and
+      // \x1b[3~ (real forward-delete) come through as `key.delete`, so we
+      // can't reliably distinguish them. Collapse both to backspace.
+      if (isAnyDelete) {
         lastActionRef.current = 'edit';
         if (valueRef.current.length === 0) {
           onEmptyBackspace?.();
-          return;
-        }
-        if (isDelete && !isBackspace) {
-          // Delete forward (Ctrl+D too)
-          const cur = ls[c.line] ?? '';
-          if (c.col < cur.length) {
-            const next = [...ls];
-            next[c.line] = cur.slice(0, c.col) + cur.slice(c.col + 1);
-            apply(joinLines(next), c);
-          } else if (c.line < ls.length - 1) {
-            const next = [...ls];
-            next[c.line] = (ls[c.line] ?? '') + (ls[c.line + 1] ?? '');
-            next.splice(c.line + 1, 1);
-            apply(joinLines(next), c);
-          }
           return;
         }
         // Backspace
@@ -515,32 +526,39 @@ export function Composer(props: ComposerProps) {
   const prefix = modePrefix(visualMode);
   const showPlaceholder = value.length === 0 && placeholder;
 
-  // Wrap visible lines and inject cursor.
+  // Wrap visible lines and inject cursor. Use wrapLine's chunk indices so
+  // the cursor maps correctly even when wrap drops the inter-chunk
+  // whitespace — without this, cursor.col can land off by one after a
+  // word-boundary wrap.
   const renderedLines: { text: string; cursorAt?: number }[] = [];
   if (showPlaceholder) {
     renderedLines.push({ text: placeholder });
   } else {
     lines.forEach((line, lineIdx) => {
-      const wrapped = softWrap(line, innerWidth);
-      let charsBefore = 0;
-      wrapped.forEach((segment) => {
-        const segmentLen = segment.length;
+      const chunks = wrapLine(line, innerWidth);
+      const isCursorLine = lineIdx === cursor.line;
+      let placedCursor = false;
+      chunks.forEach((chunk, chunkIdx) => {
         let cursorAt: number | undefined;
-        if (
-          lineIdx === cursor.line &&
-          cursor.col >= charsBefore &&
-          cursor.col <= charsBefore + segmentLen
-        ) {
-          cursorAt = cursor.col - charsBefore;
+        if (isCursorLine && !placedCursor) {
+          // Cursor is in this chunk if its column lies within the chunk's
+          // index range, OR (for the last chunk) at end-of-line beyond it.
+          const isLast = chunkIdx === chunks.length - 1;
+          if (
+            cursor.col >= chunk.startIndex &&
+            (cursor.col < chunk.endIndex ||
+              (isLast && cursor.col === chunk.endIndex))
+          ) {
+            cursorAt = cursor.col - chunk.startIndex;
+            placedCursor = true;
+          }
         }
-        renderedLines.push({ text: segment, cursorAt });
-        charsBefore += segmentLen;
+        renderedLines.push({ text: chunk.text, cursorAt });
       });
-      // Empty logical line: still render an empty visible line.
-      if (wrapped.length === 0) {
+      if (chunks.length === 0) {
         renderedLines.push({
           text: '',
-          cursorAt: lineIdx === cursor.line ? 0 : undefined,
+          cursorAt: isCursorLine ? 0 : undefined,
         });
       }
     });
