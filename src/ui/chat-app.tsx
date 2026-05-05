@@ -768,6 +768,7 @@ export function ChatApp({
                 : 'message juno…  (Shift+Tab plan · ! bash · / commands)'
         }
         isActive={view === 'chat'}
+        paletteOpen={Boolean(palette)}
         onChange={(v) => {
           setComposerValue(v);
           setPaletteIndex(0);
@@ -775,12 +776,31 @@ export function ChatApp({
         onSubmit={(v) => {
           void handleSubmit(v);
         }}
+        onCancel={() => {
+          if (palette) {
+            setComposerValue('');
+            setPaletteIndex(0);
+          }
+        }}
         onEmptyBackspace={() => {
           if (bashMode) setBashMode(false);
         }}
         onModeToggle={() => {
           if (bashMode) return;
           setMode((m) => (m === 'plan' ? 'exec' : 'plan'));
+        }}
+        onPaletteNav={(direction) => {
+          if (!palette || palette.length === 0) return;
+          setPaletteIndex((i) => {
+            if (direction === 'up')
+              return (i - 1 + palette.length) % palette.length;
+            return (i + 1) % palette.length;
+          });
+        }}
+        onPaletteAccept={() => {
+          if (!palette || palette.length === 0) return;
+          const selected = palette[paletteIndex] ?? palette[0];
+          if (selected) setComposerValue(`/${selected.name} `);
         }}
       />
 

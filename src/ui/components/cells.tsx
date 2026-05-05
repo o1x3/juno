@@ -1,7 +1,7 @@
 import { Box, Text } from 'ink';
-import type { ReactNode } from 'react';
 import type { ToolCall, ToolResult } from '@/types';
 import { formatDuration, softWrap } from '@/ui/format';
+import { renderMarkdown } from '@/ui/markdown';
 import { colors, glyphs, type ThemeColor } from '@/ui/theme';
 
 export type ToolEntry = {
@@ -54,62 +54,6 @@ function gutter(glyph: string, color: ThemeColor) {
   return <Text color={color}>{glyph} </Text>;
 }
 
-function CodeFenceBlock({ lang, code }: { lang: string; code: string[] }) {
-  return (
-    <Box flexDirection="column" marginLeft={2} marginY={0}>
-      <Text color="gray" dimColor>
-        {`┄ ${lang || 'code'} ${'┄'.repeat(40)}`}
-      </Text>
-      {code.map((line, i) => (
-        <Text key={i} color="cyanBright">
-          {`  ${line}`}
-        </Text>
-      ))}
-      <Text color="gray" dimColor>
-        {'┄'.repeat(40 + (lang || 'code').length + 4)}
-      </Text>
-    </Box>
-  );
-}
-
-function renderAssistantWithFences(text: string, width: number): ReactNode[] {
-  const out: ReactNode[] = [];
-  const lines = text.split('\n');
-  let i = 0;
-  let key = 0;
-  while (i < lines.length) {
-    const line = lines[i] ?? '';
-    const fenceMatch = line.match(/^```\s*(\w*)\s*$/);
-    if (fenceMatch) {
-      const lang = fenceMatch[1] ?? '';
-      const code: string[] = [];
-      i += 1;
-      while (i < lines.length && !(lines[i] ?? '').match(/^```\s*$/)) {
-        code.push(lines[i] ?? '');
-        i += 1;
-      }
-      i += 1; // skip closing fence
-      out.push(<CodeFenceBlock key={key++} lang={lang} code={code} />);
-      continue;
-    }
-    if (line.length === 0) {
-      out.push(<Text key={key++}> </Text>);
-      i += 1;
-      continue;
-    }
-    const wrapped = softWrap(line, Math.max(20, width - 4));
-    wrapped.forEach((seg) => {
-      out.push(
-        <Text key={key++} color="cyanBright">
-          {seg}
-        </Text>,
-      );
-    });
-    i += 1;
-  }
-  return out;
-}
-
 export function UserCell({
   cell,
   width,
@@ -139,7 +83,7 @@ export function AssistantCell({
   cell: Extract<TranscriptCell, { kind: 'assistant' }>;
   width: number;
 }) {
-  const nodes = renderAssistantWithFences(cell.text, width);
+  const nodes = cell.text.length > 0 ? renderMarkdown(cell.text, width) : [];
   return (
     <Box flexDirection="column" marginBottom={1}>
       <Box flexDirection="row">

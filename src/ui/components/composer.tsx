@@ -13,6 +13,7 @@ export type ComposerProps = {
   history: string[];
   placeholder?: string;
   isActive: boolean;
+  paletteOpen?: boolean;
   onChange: (value: string) => void;
   onSubmit: (value: string) => void;
   onCancel?: () => void;
@@ -20,6 +21,8 @@ export type ComposerProps = {
   onModeToggle?: () => void;
   onArrowUpAtTop?: () => void;
   onArrowDownAtBottom?: () => void;
+  onPaletteNav?: (direction: 'up' | 'down') => void;
+  onPaletteAccept?: () => void;
 };
 
 type Cursor = { line: number; col: number };
@@ -71,6 +74,9 @@ export function Composer(props: ComposerProps) {
     onModeToggle,
     onArrowUpAtTop,
     onArrowDownAtBottom,
+    onPaletteNav,
+    onPaletteAccept,
+    paletteOpen,
   } = props;
 
   const [cursor, setCursor] = useState<Cursor>({ line: 0, col: 0 });
@@ -162,10 +168,35 @@ export function Composer(props: ComposerProps) {
       const ls = splitLines(valueRef.current);
       const c = cursorRef.current;
 
+      // Some terminals send DEL (0x7f) or BS (0x08) for the backspace key
+      // without triggering Ink's `key.backspace`. Detect explicitly so the
+      // raw byte never falls through into the plain-input branch and gets
+      // re-inserted into the buffer.
+      const inputCode = input.length === 1 ? input.charCodeAt(0) : -1;
+      const isBackspace =
+        key.backspace || inputCode === 0x7f || inputCode === 0x08;
+      const isDelete = key.delete;
+
       // Cancel/exit: bubble up.
       if (key.escape) {
         onCancel?.();
         return;
+      }
+
+      // Palette navigation: ↑/↓ cycle items, Tab accepts highlighted.
+      if (paletteOpen) {
+        if (key.tab && !key.shift) {
+          onPaletteAccept?.();
+          return;
+        }
+        if (key.upArrow) {
+          onPaletteNav?.('up');
+          return;
+        }
+        if (key.downArrow) {
+          onPaletteNav?.('down');
+          return;
+        }
       }
 
       // Mode toggle (Shift+Tab).
@@ -195,12 +226,12 @@ export function Composer(props: ComposerProps) {
       }
 
       // Backspace: at empty composer + bash/palette mode → exit.
-      if (key.backspace || key.delete) {
+      if (isBackspace || isDelete) {
         if (valueRef.current.length === 0) {
           onEmptyBackspace?.();
           return;
         }
-        if (key.delete) {
+        if (isDelete && !isBackspace) {
           // Delete forward (Ctrl+D too)
           const cur = ls[c.line] ?? '';
           if (c.col < cur.length) {
@@ -339,8 +370,13 @@ export function Composer(props: ComposerProps) {
         return;
       }
 
-      // Plain typed character.
+      // Plain typed character — filter control bytes that escaped earlier
+      // branches (e.g. \x7f if Ink ever delivered it bare on this terminal).
       if (input && !key.ctrl && !key.meta) {
+        if (input.length === 1) {
+          const code = input.charCodeAt(0);
+          if (code < 0x20 || code === 0x7f) return;
+        }
         insertText(input);
       }
     },

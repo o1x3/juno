@@ -164,7 +164,7 @@ export function SettingsPage(props: SettingsPageProps) {
     section.fields.map((field, fIdx) => ({ section, field, sIdx, fIdx })),
   );
   const [cursor, setCursor] = useState(0);
-  const [editing, setEditing] = useState<string>('');
+  const [editingText, setEditingText] = useState<string>('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -173,15 +173,15 @@ export function SettingsPage(props: SettingsPageProps) {
     if (editingId) {
       if (key.escape) {
         setEditingId(null);
-        setEditing('');
+        setEditingText('');
         return;
       }
       if (key.return) {
         const field = flat[cursor]?.field;
         if (!field) return;
-        let value: unknown = editing.trim();
+        let value: unknown = editingText.trim();
         if (field.kind === 'number') {
-          const n = Number.parseInt(editing, 10);
+          const n = Number.parseInt(editingText, 10);
           if (!Number.isFinite(n) || n <= 0) {
             setError('positive integer required');
             return;
@@ -192,16 +192,16 @@ export function SettingsPage(props: SettingsPageProps) {
         const next = setField(props.draft, field.id, value);
         props.onChange(next);
         setEditingId(null);
-        setEditing('');
+        setEditingText('');
         setError(null);
         return;
       }
       if (key.backspace) {
-        setEditing((e) => e.slice(0, -1));
+        setEditingText((e) => e.slice(0, -1));
         return;
       }
       if (input && !key.ctrl && !key.meta) {
-        setEditing((e) => e + input);
+        setEditingText((e) => e + input);
       }
       return;
     }
@@ -226,6 +226,22 @@ export function SettingsPage(props: SettingsPageProps) {
       setCursor((c) => Math.min(flat.length - 1, c + 1));
       return;
     }
+    if (key.leftArrow || key.rightArrow) {
+      const field = flat[cursor]?.field;
+      if (field?.kind === 'enum') {
+        const idx = field.options.indexOf(field.value);
+        const offset = key.leftArrow ? -1 : 1;
+        const nextIdx =
+          (idx + offset + field.options.length) % field.options.length;
+        const nextValue = field.options[nextIdx] ?? field.value;
+        const next = setField(props.draft, field.id, nextValue);
+        props.onChange(next);
+      } else if (field?.kind === 'toggle') {
+        const next = setField(props.draft, field.id, !field.value);
+        props.onChange(next);
+      }
+      return;
+    }
     if (input === ' ') {
       const field = flat[cursor]?.field;
       if (field?.kind === 'toggle') {
@@ -243,15 +259,15 @@ export function SettingsPage(props: SettingsPageProps) {
         return;
       }
       if (field.kind === 'enum') {
-        const idx = field.options.indexOf(field.value);
-        const nextValue =
-          field.options[(idx + 1) % field.options.length] ?? field.value;
-        const next = setField(props.draft, field.id, nextValue);
-        props.onChange(next);
+        // Enter on enum: enter free-text mode so the user can type a value
+        // outside the enum list (e.g. a custom theme later, or a model name
+        // when a field is reused as enum-with-suggestions).
+        setEditingId(field.id);
+        setEditingText(String(field.value ?? ''));
         return;
       }
       setEditingId(field.id);
-      setEditing(
+      setEditingText(
         field.kind === 'number'
           ? String(field.value)
           : String(field.value ?? ''),
@@ -266,7 +282,9 @@ export function SettingsPage(props: SettingsPageProps) {
           juno · settings
         </Text>
         <Text color={colors.dim}>
-          {'    esc back · ⌃S save · ⏎ edit / toggle'}
+          {
+            '    ↑↓ row · ←→ cycle · space toggle · ⏎ edit / type custom · ⌃S save · esc back'
+          }
         </Text>
       </Box>
       {sections.map((section) => (
@@ -282,16 +300,21 @@ export function SettingsPage(props: SettingsPageProps) {
           {section.fields.map((field) => {
             const idxInFlat = flat.findIndex((f) => f.field.id === field.id);
             const isCursor = idxInFlat === cursor;
-            const valueDisplay =
-              field.kind === 'toggle'
-                ? field.value
-                  ? 'on'
-                  : 'off'
-                : field.kind === 'number'
-                  ? String(field.value)
-                  : String(field.value ?? '');
-            const displayValue =
-              editingId === field.id ? `${editing}_` : valueDisplay;
+            const isEditing = editingId === field.id;
+            let valueDisplay: string;
+            if (isEditing) {
+              valueDisplay = `${editingText}_`;
+            } else if (field.kind === 'toggle') {
+              valueDisplay = field.value ? '◆ on ' : '  off';
+            } else if (field.kind === 'enum') {
+              const arrowL = isCursor ? '‹ ' : '  ';
+              const arrowR = isCursor ? ' ›' : '  ';
+              valueDisplay = `${arrowL}${field.value}${arrowR}`;
+            } else if (field.kind === 'number') {
+              valueDisplay = String(field.value);
+            } else {
+              valueDisplay = String(field.value ?? '');
+            }
             return (
               <Box key={field.id} flexDirection="row">
                 <Text color={isCursor ? colors.accent : colors.dim}>
@@ -300,8 +323,8 @@ export function SettingsPage(props: SettingsPageProps) {
                 <Text color={isCursor ? 'whiteBright' : 'white'}>
                   {field.label.padEnd(18)}
                 </Text>
-                <Text color={editingId === field.id ? colors.accent : 'white'}>
-                  {displayValue.padEnd(20)}
+                <Text color={isEditing ? colors.accent : 'white'}>
+                  {valueDisplay.padEnd(22)}
                 </Text>
                 <Text color={colors.dim} dimColor>
                   {field.description}
