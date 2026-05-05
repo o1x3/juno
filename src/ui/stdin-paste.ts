@@ -1,5 +1,3 @@
-import type { ReadStream } from 'node:tty';
-
 const PASTE_START = '\x1b[200~';
 const PASTE_END = '\x1b[201~';
 
@@ -9,21 +7,24 @@ export type PasteHandle = {
   dispose: () => void;
 };
 
+// Attach a `data` listener to stdin that recognises bracketed-paste markers
+// and emits the inner text as a single atomic event. Ink's own keypress
+// listener still receives the same data, so non-paste keystrokes work
+// normally — we just flag pastes for the composer to insert as one mutation
+// instead of one character at a time.
+//
+// We deliberately do NOT toggle bracketed paste mode (\x1b[?2004h /
+// \x1b[?2004l). Writing those sequences to process.stdin echoes them right
+// back into our input stream and confuses Ink's keypress parser (notably
+// breaking backspace handling on some terminals). Modern terminals (macOS
+// Terminal, iTerm2, kitty, alacritty, recent Linux defaults) enable
+// bracketed paste by default; on terminals that don't, paste falls back to
+// per-character delivery, which is the same behaviour Ink had before this
+// listener existed.
 export function attachPasteListener(
-  stdin: ReadStream | NodeJS.ReadStream,
+  stdin: NodeJS.ReadStream,
   onPaste: PasteListener,
 ): PasteHandle {
-  // Some terminals support bracketed paste only after we ask for it.
-  let enabled = false;
-  if ('isTTY' in stdin && stdin.isTTY) {
-    try {
-      (stdin as ReadStream).write?.('\x1b[?2004h');
-      enabled = true;
-    } catch {
-      enabled = false;
-    }
-  }
-
   let buffer = '';
   let inPaste = false;
 
@@ -60,13 +61,6 @@ export function attachPasteListener(
   return {
     dispose: () => {
       stdin.off('data', dataHandler);
-      if (enabled && 'isTTY' in stdin && stdin.isTTY) {
-        try {
-          (stdin as ReadStream).write?.('\x1b[?2004l');
-        } catch {
-          // ignore
-        }
-      }
     },
   };
 }

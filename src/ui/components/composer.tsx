@@ -140,15 +140,21 @@ export function Composer(props: ComposerProps) {
     [apply],
   );
 
-  // Bracketed paste from stdin.
+  // Bracketed paste from stdin. Pin the callback in a ref so the effect
+  // attaches the listener exactly once per (active, stdin) pair — without
+  // this, `insertText` re-creates each render and the listener re-attaches,
+  // which is wasteful and historically caused interference with Ink's
+  // keypress parsing.
+  const insertTextRef = useRef(insertText);
+  insertTextRef.current = insertText;
   const { stdin } = useStdin();
   useEffect(() => {
     if (!isActive || !stdin) return;
     const handle = attachPasteListener(stdin, (text) => {
-      insertText(text);
+      insertTextRef.current(text);
     });
     return () => handle.dispose();
-  }, [isActive, stdin, insertText]);
+  }, [isActive, stdin]);
 
   const submitCurrent = useCallback(() => {
     const text = valueRef.current;
