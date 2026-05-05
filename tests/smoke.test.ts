@@ -5,7 +5,9 @@ import { join } from 'node:path';
 import { runAgentTurn } from '@/core/agent-loop';
 import { loadProjectInstructions } from '@/core/instructions';
 import { createBuiltinTools } from '@/core/tools';
-import type { AgentConfig, ModelClient } from '@/types';
+import type { ModelClient } from '@/types';
+
+import { makeConfig } from './_fixtures';
 
 let workspace = '';
 
@@ -22,19 +24,7 @@ describe('smoke path', () => {
     await mkdir(join(workspace, '.git'));
     await writeFile(join(workspace, 'AGENTS.md'), 'Prefer concise changes.');
 
-    const config: AgentConfig = {
-      cwd: workspace,
-      homeDir: workspace,
-      authFile: join(workspace, 'auth.json'),
-      sessionsDir: join(workspace, 'sessions'),
-      model: 'fake-model',
-      apiKey: 'unused',
-      maxSteps: 3,
-      toolOutputLimit: 1000,
-      readLineLimit: 50,
-      bashTimeoutMs: 1000,
-      codexBackendUrl: 'https://chatgpt.com/backend-api',
-    };
+    const config = makeConfig(workspace, { maxSteps: 3 });
 
     const instructions = await loadProjectInstructions(workspace);
     expect(instructions.mergedContent).toContain('Prefer concise changes.');
@@ -66,6 +56,7 @@ describe('smoke path', () => {
     const result = await runAgentTurn({
       config,
       sessionId: 'smoke',
+      model: 'fake-model',
       systemPrompt: instructions.mergedContent,
       userInput: 'create hello.txt',
       messages: [],

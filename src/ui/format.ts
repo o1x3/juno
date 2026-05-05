@@ -1,0 +1,228 @@
+import { eastAsianWidth } from 'get-east-asian-width';
+
+import { glyphs } from '@/ui/theme';
+
+// Grapheme segmenter shared across the renderer. Keeping a singleton matches
+// pi-mono's pattern (`packages/tui/src/utils.ts:4`) and avoids re-creating
+// the segmenter on every wrap call.
+const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+
+export function formatTokens(count: number): string {
+  if (!Number.isFinite(count) || count < 0) return '0';
+  if (count < 1000) return Math.round(count).toString();
+  if (count < 10_000) return `${(count / 1000).toFixed(1)}k`;
+  if (count < 1_000_000) return `${Math.round(count / 1000)}k`;
+  if (count < 10_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
+  return `${Math.round(count / 1_000_000)}M`;
+}
+
+export function formatCost(usd: number): string {
+  if (!Number.isFinite(usd) || usd <= 0) return '$0.00';
+  if (usd < 0.01) return `$${usd.toFixed(4)}`;
+  if (usd < 1) return `$${usd.toFixed(3)}`;
+  return `$${usd.toFixed(2)}`;
+}
+
+export function formatDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return '0s';
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const seconds = ms / 1000;
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+export function truncatePath(path: string, max: number): string {
+  const home = process.env.HOME;
+  let p = path;
+  if (home && p.startsWith(home)) p = `~${p.slice(home.length)}`;
+  if (p.length <= max) return p;
+  return `…${p.slice(-(max - 1))}`;
+}
+
+export function clampScroll(offset: number, max: number): number {
+  if (max <= 0) return 0;
+  if (offset < 0) return 0;
+  if (offset > max) return max;
+  return offset;
+}
+
+export function progressBar(percent: number, width: number): string {
+  const clamped = Math.max(0, Math.min(100, percent));
+  const filled = Math.round((clamped / 100) * width);
+  return (
+    glyphs.filled.repeat(filled) +
+    glyphs.empty.repeat(Math.max(0, width - filled))
+  );
+}
+
+export function segmentBar(
+  segments: number[],
+  width: number,
+): { lengths: number[] } {
+  const total = segments.reduce((a, b) => a + b, 0);
+  if (total <= 0 || width <= 0) {
+    return { lengths: segments.map(() => 0) };
+  }
+  // Largest remainder method to land exactly on width
+  const exact = segments.map((v) => (v / total) * width);
+  const floored = exact.map((v) => Math.floor(v));
+  let remaining = width - floored.reduce((a, b) => a + b, 0);
+  const order = exact
+    .map((v, i) => ({ i, frac: v - Math.floor(v) }))
+    .sort((a, b) => b.frac - a.frac);
+  const lengths = [...floored];
+  for (let k = 0; k < order.length && remaining > 0; k++) {
+    const idx = order[k]?.i;
+    if (idx === undefined) break;
+    lengths[idx] = (lengths[idx] ?? 0) + 1;
+    remaining -= 1;
+  }
+  return { lengths };
+}
+
+export function sparkline(values: number[], width = values.length): string {
+  if (values.length === 0) return '';
+  const max = Math.max(...values, 1);
+  const slice =
+    values.length > width ? values.slice(values.length - width) : values;
+  return slice
+    .map((v) => {
+      if (v <= 0) return glyphs.sparkBars[0] ?? ' ';
+      const idx = Math.min(
+        glyphs.sparkBars.length - 1,
+        Math.max(0, Math.round((v / max) * (glyphs.sparkBars.length - 1))),
+      );
+      return glyphs.sparkBars[idx] ?? ' ';
+    })
+    .join('');
+}
+
+// Reduced port of pi-mono's grapheme width logic
+// (`packages/tui/src/utils.ts:200`). Pure ASCII goes through a fast path; the
+// rest goes through the Intl.Segmenter + east-asian-width.
+const isAsciiPrintable = (s: string): boolean => {
+  for (let i = 0; i < s.length; i += 1) {
+    const c = s.charCodeAt(i);
+    if (c < 0x20 || c > 0x7e) return false;
+  }
+  return true;
+};
+
+const ZERO_WIDTH =
+  /^(?:\p{Default_Ignorable_Code_Point}|\p{Control}|\p{Mark}|\p{Surrogate})+$/v;
+
+function graphemeWidth(g: string): number {
+  if (ZERO_WIDTH.test(g)) return 0;
+  const cp = g.codePointAt(0);
+  if (cp === undefined) return 0;
+  // Regional indicators render as full-width emoji in most terminals.
+  if (cp >= 0x1f1e6 && cp <= 0x1f1ff) return 2;
+  // Heuristic emoji match: anything in the supplementary planes that isn't a
+  // standalone wide CJK is treated as 2 cells.
+  if (cp >= 0x1f000) return 2;
+  return eastAsianWidth(cp);
+}
+
+export function visibleWidth(s: string): number {
+  if (s.length === 0) return 0;
+  if (isAsciiPrintable(s)) return s.length;
+  let w = 0;
+  for (const { segment } of segmenter.segment(s)) w += graphemeWidth(segment);
+  return w;
+}
+
+const WHITESPACE = /^\s+$/;
+
+export type WrapChunk = {
+  text: string;
+  startIndex: number;
+  endIndex: number;
+};
+
+// Grapheme-aware word wrap modelled on pi-mono's
+// `packages/tui/src/components/editor.ts:101 wordWrapLine`. Returns chunks
+// keyed by start/end indices in the original string so callers can map a
+// cursor position to its rendered chunk and column.
+export function wrapLine(line: string, maxWidth: number): WrapChunk[] {
+  if (!line || maxWidth <= 0) {
+    return [{ text: '', startIndex: 0, endIndex: 0 }];
+  }
+  if (visibleWidth(line) <= maxWidth) {
+    return [{ text: line, startIndex: 0, endIndex: line.length }];
+  }
+
+  const segments = [...segmenter.segment(line)];
+  const chunks: WrapChunk[] = [];
+  let chunkStart = 0;
+  let currentWidth = 0;
+  let wrapOppIndex = -1;
+  let wrapOppWidth = 0;
+
+  for (let i = 0; i < segments.length; i += 1) {
+    const seg = segments[i];
+    if (!seg) continue;
+    const grapheme = seg.segment;
+    const gWidth = graphemeWidth(grapheme);
+    const charIndex = seg.index;
+    const isWs = WHITESPACE.test(grapheme);
+
+    if (currentWidth + gWidth > maxWidth) {
+      if (
+        wrapOppIndex >= 0 &&
+        currentWidth - wrapOppWidth + gWidth <= maxWidth
+      ) {
+        chunks.push({
+          text: line.slice(chunkStart, wrapOppIndex),
+          startIndex: chunkStart,
+          endIndex: wrapOppIndex,
+        });
+        chunkStart = wrapOppIndex;
+        currentWidth -= wrapOppWidth;
+      } else if (chunkStart < charIndex) {
+        chunks.push({
+          text: line.slice(chunkStart, charIndex),
+          startIndex: chunkStart,
+          endIndex: charIndex,
+        });
+        chunkStart = charIndex;
+        currentWidth = 0;
+      }
+      wrapOppIndex = -1;
+    }
+
+    if (gWidth > maxWidth) {
+      // A single grapheme wider than the available width — split it across
+      // lines at grapheme granularity. (Real-world: very narrow terminals.)
+      chunks.push({
+        text: grapheme,
+        startIndex: charIndex,
+        endIndex: charIndex + grapheme.length,
+      });
+      chunkStart = charIndex + grapheme.length;
+      currentWidth = 0;
+      wrapOppIndex = -1;
+      continue;
+    }
+
+    currentWidth += gWidth;
+
+    const next = segments[i + 1];
+    if (isWs && next && !WHITESPACE.test(next.segment)) {
+      wrapOppIndex = next.index;
+      wrapOppWidth = currentWidth;
+    }
+  }
+
+  chunks.push({
+    text: line.slice(chunkStart),
+    startIndex: chunkStart,
+    endIndex: line.length,
+  });
+  return chunks;
+}
+
+export function softWrap(line: string, width: number): string[] {
+  return wrapLine(line, width).map((c) => c.text);
+}

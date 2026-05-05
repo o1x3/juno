@@ -2,6 +2,8 @@ import type { ZodType } from 'zod';
 
 export type AgentRole = 'user' | 'assistant' | 'tool';
 
+export type AgentMode = 'plan' | 'exec';
+
 export type SerializedMessage =
   | {
       role: 'user';
@@ -46,6 +48,12 @@ export type SessionEvent =
       cwd: string;
       model: string;
       note?: string;
+    }
+  | {
+      type: 'session_meta';
+      timestamp: string;
+      name: string;
+      source: 'auto' | 'manual';
     };
 
 export type ToolCall = {
@@ -112,12 +120,24 @@ export type ProjectInstructionSet = {
   mergedContent: string;
 };
 
+export type UiPreferences = {
+  statusPane: 'visible' | 'hidden';
+  statusPaneShortcut: string;
+  theme: 'auto' | 'dark' | 'light';
+  timestamps: boolean;
+};
+
 export type AgentConfig = {
   cwd: string;
   homeDir: string;
+  configFile: string;
   authFile: string;
   sessionsDir: string;
   model: string;
+  planModel: string;
+  execModel: string;
+  namingModel: string;
+  autoName: boolean;
   apiKey?: string;
   baseUrl?: string;
   maxSteps: number;
@@ -126,6 +146,7 @@ export type AgentConfig = {
   bashTimeoutMs: number;
   codexBackendUrl: string;
   codexModelOverride?: string;
+  ui: UiPreferences;
 };
 
 export type AuthMode = 'api-key' | 'oauth-api-key' | 'oauth-codex' | 'none';
@@ -158,12 +179,23 @@ export type SessionSummary = {
   path: string;
   updatedAt: string;
   eventCount: number;
+  name?: string;
+};
+
+export type ModelUsage = {
+  input: number;
+  output: number;
+  reasoning?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  estimated?: boolean;
 };
 
 export type ModelStep = {
   text: string;
   toolCalls: ToolCall[];
   finishReason: string;
+  usage?: ModelUsage;
 };
 
 export type ModelClient = {
@@ -174,6 +206,7 @@ export type ModelClient = {
     tools: ToolSpec[];
     onTextDelta?: (delta: string) => void;
     onToolCall?: (call: ToolCall) => void;
+    onUsage?: (usage: ModelUsage) => void;
   }): Promise<ModelStep>;
 };
 
@@ -182,6 +215,7 @@ export type RawAgentTurnResult = {
   toolCalls: ToolCall[];
   toolResults: ToolResult[];
   messages: SerializedMessage[];
+  usage?: ModelUsage;
 };
 
 export type AgentTurnResult = RawAgentTurnResult & {

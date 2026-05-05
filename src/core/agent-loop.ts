@@ -2,6 +2,7 @@ import { appendSessionEvent } from '@/core/session-store';
 import type {
   AgentConfig,
   ModelClient,
+  ModelUsage,
   ProjectInstructionSet,
   RawAgentTurnResult,
   SerializedMessage,
@@ -13,6 +14,7 @@ import type {
 type TurnOptions = {
   config: AgentConfig;
   sessionId: string;
+  model: string;
   systemPrompt: string;
   userInput: string;
   messages: SerializedMessage[];
@@ -21,7 +23,24 @@ type TurnOptions = {
   onTextDelta?: (delta: string) => void;
   onToolCall?: (call: ToolCall) => void;
   onToolResult?: (result: ToolResult) => void;
+  onUsage?: (usage: ModelUsage) => void;
 };
+
+function mergeUsage(
+  acc: ModelUsage | undefined,
+  next: ModelUsage | undefined,
+): ModelUsage | undefined {
+  if (!next) return acc;
+  if (!acc) return { ...next };
+  return {
+    input: acc.input + next.input,
+    output: acc.output + next.output,
+    reasoning: (acc.reasoning ?? 0) + (next.reasoning ?? 0) || undefined,
+    cacheRead: (acc.cacheRead ?? 0) + (next.cacheRead ?? 0) || undefined,
+    cacheWrite: (acc.cacheWrite ?? 0) + (next.cacheWrite ?? 0) || undefined,
+    estimated: acc.estimated || next.estimated,
+  };
+}
 
 export async function runAgentTurn(
   options: TurnOptions,
@@ -29,6 +48,7 @@ export async function runAgentTurn(
   const {
     config,
     sessionId,
+    model,
     systemPrompt,
     userInput,
     messages,
@@ -37,6 +57,7 @@ export async function runAgentTurn(
     onTextDelta,
     onToolCall,
     onToolResult,
+    onUsage,
   } = options;
 
   const conversation = [
@@ -52,9 +73,10 @@ export async function runAgentTurn(
   });
 
   let finalAssistantText = '';
+  let aggregateUsage: ModelUsage | undefined;
   for (let step = 0; step < config.maxSteps; step += 1) {
     const stepResult = await modelClient.runStep({
-      model: config.model,
+      model,
       systemPrompt,
       messages: conversation,
       tools,
@@ -62,6 +84,10 @@ export async function runAgentTurn(
       onToolCall: (call) => {
         toolCallsSeen.push(call);
         onToolCall?.(call);
+      },
+      onUsage: (usage) => {
+        aggregateUsage = mergeUsage(aggregateUsage, usage);
+        if (aggregateUsage) onUsage?.(aggregateUsage);
       },
     });
 
@@ -132,7 +158,7 @@ export async function runAgentTurn(
     status: 'turn_completed',
     sessionId,
     cwd: config.cwd,
-    model: config.model,
+    model,
   });
 
   return {
@@ -140,6 +166,7 @@ export async function runAgentTurn(
     toolCalls: toolCallsSeen,
     toolResults: toolResultsSeen,
     messages: conversation,
+    usage: aggregateUsage,
   };
 }
 

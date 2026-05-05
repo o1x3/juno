@@ -1,17 +1,34 @@
 import { existsSync, readFileSync } from 'node:fs';
+import { mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { z } from 'zod';
 
-import type { AgentConfig } from '@/types';
+import type { AgentConfig, UiPreferences } from '@/types';
 
 const DEFAULT_HOME_DIR = join(homedir(), '.juno');
 const DEFAULT_CONFIG_FILE = 'config.json';
+const DEFAULT_MODEL = 'gpt-5.4-mini';
+const DEFAULT_PLAN_MODEL = 'gpt-5.4';
+const DEFAULT_NAMING_MODEL = 'gpt-5.4-nano';
 
-const configFileSchema = z
+const uiSchema = z
+  .object({
+    statusPane: z.enum(['visible', 'hidden']).optional(),
+    statusPaneShortcut: z.string().trim().min(1).optional(),
+    theme: z.enum(['auto', 'dark', 'light']).optional(),
+    timestamps: z.boolean().optional(),
+  })
+  .strict();
+
+export const configFileSchema = z
   .object({
     model: z.string().trim().min(1).optional(),
+    planModel: z.string().trim().min(1).optional(),
+    execModel: z.string().trim().min(1).optional(),
+    namingModel: z.string().trim().min(1).optional(),
+    autoName: z.boolean().optional(),
     baseUrl: z.string().trim().min(1).optional(),
     maxSteps: z.number().int().positive().finite().optional(),
     toolOutputLimit: z.number().int().positive().finite().optional(),
@@ -19,10 +36,11 @@ const configFileSchema = z
     bashTimeoutMs: z.number().int().positive().finite().optional(),
     codexBackendUrl: z.string().trim().min(1).optional(),
     codexModel: z.string().trim().min(1).optional(),
+    ui: uiSchema.optional(),
   })
   .strict();
 
-type ConfigFile = z.infer<typeof configFileSchema>;
+export type ConfigFile = z.infer<typeof configFileSchema>;
 
 export type ConfigOverrides = {
   cwd?: string;
@@ -30,6 +48,13 @@ export type ConfigOverrides = {
   apiKey?: string;
   baseUrl?: string;
   maxSteps?: number;
+};
+
+export const DEFAULT_UI: UiPreferences = {
+  statusPane: 'visible',
+  statusPaneShortcut: 'ctrl+g',
+  theme: 'auto',
+  timestamps: false,
 };
 
 function loadConfigFile(configFile: string): ConfigFile {
@@ -74,6 +99,70 @@ function parsePositiveIntEnv(
   return Number.parseInt(value, 10);
 }
 
+function parseBoolEnv(
+  name: string,
+  value: string | undefined,
+): boolean | undefined {
+  if (value === undefined) return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'true' || normalized === '1' || normalized === 'yes')
+    return true;
+  if (normalized === 'false' || normalized === '0' || normalized === 'no')
+    return false;
+  throw new Error(`Invalid environment variable ${name}: expected true/false`);
+}
+
+function parseStatusPaneEnv(
+  value: string | undefined,
+): UiPreferences['statusPane'] | undefined {
+  if (value === undefined) return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'visible' || normalized === 'on' || normalized === 'true')
+    return 'visible';
+  if (normalized === 'hidden' || normalized === 'off' || normalized === 'false')
+    return 'hidden';
+  throw new Error(
+    `Invalid environment variable JUNO_UI_STATUS_PANE: expected visible/hidden`,
+  );
+}
+
+function parseThemeEnv(
+  value: string | undefined,
+): UiPreferences['theme'] | undefined {
+  if (value === undefined) return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (
+    normalized === 'auto' ||
+    normalized === 'dark' ||
+    normalized === 'light'
+  ) {
+    return normalized;
+  }
+  throw new Error(
+    `Invalid environment variable JUNO_UI_THEME: expected auto/dark/light`,
+  );
+}
+
+function resolveUi(fileUi: ConfigFile['ui']): UiPreferences {
+  const statusPane =
+    parseStatusPaneEnv(process.env.JUNO_UI_STATUS_PANE) ??
+    fileUi?.statusPane ??
+    DEFAULT_UI.statusPane;
+  const statusPaneShortcut =
+    process.env.JUNO_UI_STATUS_PANE_SHORTCUT ??
+    fileUi?.statusPaneShortcut ??
+    DEFAULT_UI.statusPaneShortcut;
+  const theme =
+    parseThemeEnv(process.env.JUNO_UI_THEME) ??
+    fileUi?.theme ??
+    DEFAULT_UI.theme;
+  const timestamps =
+    parseBoolEnv('JUNO_UI_TIMESTAMPS', process.env.JUNO_UI_TIMESTAMPS) ??
+    fileUi?.timestamps ??
+    DEFAULT_UI.timestamps;
+  return { statusPane, statusPaneShortcut, theme, timestamps };
+}
+
 export function resolveConfig(overrides: ConfigOverrides = {}): AgentConfig {
   const homeDir = process.env.JUNO_HOME ?? DEFAULT_HOME_DIR;
   const configFile =
@@ -85,7 +174,19 @@ export function resolveConfig(overrides: ConfigOverrides = {}): AgentConfig {
     process.env.JUNO_MODEL ??
     process.env.OPENAI_MODEL ??
     fileConfig.model ??
-    'gpt-5.4-mini';
+    DEFAULT_MODEL;
+  const execModel =
+    process.env.JUNO_EXEC_MODEL ?? fileConfig.execModel ?? model;
+  const planModel =
+    process.env.JUNO_PLAN_MODEL ?? fileConfig.planModel ?? DEFAULT_PLAN_MODEL;
+  const namingModel =
+    process.env.JUNO_NAMING_MODEL ??
+    fileConfig.namingModel ??
+    DEFAULT_NAMING_MODEL;
+  const autoName =
+    parseBoolEnv('JUNO_AUTO_NAME', process.env.JUNO_AUTO_NAME) ??
+    fileConfig.autoName ??
+    true;
   const maxSteps =
     overrides.maxSteps ??
     parsePositiveIntEnv('JUNO_MAX_STEPS', process.env.JUNO_MAX_STEPS) ??
@@ -123,9 +224,14 @@ export function resolveConfig(overrides: ConfigOverrides = {}): AgentConfig {
   return {
     cwd,
     homeDir,
+    configFile,
     authFile: join(homeDir, 'auth.json'),
     sessionsDir: join(homeDir, 'sessions'),
     model,
+    planModel,
+    execModel,
+    namingModel,
+    autoName,
     apiKey: overrides.apiKey ?? process.env.OPENAI_API_KEY,
     baseUrl:
       overrides.baseUrl ?? process.env.OPENAI_BASE_URL ?? fileConfig.baseUrl,
@@ -135,5 +241,27 @@ export function resolveConfig(overrides: ConfigOverrides = {}): AgentConfig {
     bashTimeoutMs,
     codexBackendUrl,
     codexModelOverride,
+    ui: resolveUi(fileConfig.ui),
   };
+}
+
+export async function loadConfigFromDisk(
+  configFile: string,
+): Promise<ConfigFile> {
+  return loadConfigFile(configFile);
+}
+
+export async function saveConfig(
+  configFile: string,
+  patch: ConfigFile,
+): Promise<ConfigFile> {
+  const current = existsSync(configFile) ? loadConfigFile(configFile) : {};
+  const merged: ConfigFile = { ...current, ...patch };
+  if (patch.ui || current.ui) {
+    merged.ui = { ...(current.ui ?? {}), ...(patch.ui ?? {}) };
+  }
+  const validated = configFileSchema.parse(merged);
+  await mkdir(dirname(configFile), { recursive: true });
+  await Bun.write(configFile, `${JSON.stringify(validated, null, 2)}\n`);
+  return validated;
 }

@@ -59,19 +59,27 @@ async function seedMixedRegistry(homeDir: string): Promise<void> {
   );
 }
 
+import { DEFAULT_UI } from '@/core/config';
+
 function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   return {
     cwd: workspace,
     homeDir: workspace,
+    configFile: join(workspace, 'config.json'),
     authFile: join(workspace, 'auth.json'),
     sessionsDir: join(workspace, 'sessions'),
     model: 'gpt-not-in-registry',
+    planModel: 'gpt-5.4',
+    execModel: 'gpt-not-in-registry',
+    namingModel: 'gpt-5.4-nano',
+    autoName: false,
     apiKey: undefined,
     maxSteps: 4,
     toolOutputLimit: 1000,
     readLineLimit: 50,
     bashTimeoutMs: 1000,
     codexBackendUrl: 'https://chatgpt.com/backend-api',
+    ui: { ...DEFAULT_UI },
     ...overrides,
   };
 }

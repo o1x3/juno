@@ -5,7 +5,9 @@ import { join } from 'node:path';
 
 import { runAgentTurn } from '@/core/agent-loop';
 import { createBuiltinTools } from '@/core/tools';
-import type { AgentConfig, ModelClient } from '@/types';
+import type { ModelClient } from '@/types';
+
+import { makeConfig } from './_fixtures';
 
 let workspace = '';
 
@@ -19,19 +21,7 @@ afterEach(async () => {
 describe('agent loop', () => {
   test('continues after tool calls and exits on plain assistant text', async () => {
     workspace = await mkdtemp(join(tmpdir(), 'juno-loop-'));
-    const config: AgentConfig = {
-      cwd: workspace,
-      homeDir: workspace,
-      authFile: join(workspace, 'auth.json'),
-      sessionsDir: join(workspace, 'sessions'),
-      model: 'fake-model',
-      apiKey: 'unused',
-      maxSteps: 4,
-      toolOutputLimit: 1000,
-      readLineLimit: 50,
-      bashTimeoutMs: 1000,
-      codexBackendUrl: 'https://chatgpt.com/backend-api',
-    };
+    const config = makeConfig(workspace);
 
     let callCount = 0;
     const modelClient: ModelClient = {
@@ -62,6 +52,7 @@ describe('agent loop', () => {
     const result = await runAgentTurn({
       config,
       sessionId: 's1',
+      model: 'fake-model',
       systemPrompt: 'test',
       userInput: 'write a file',
       messages: [],

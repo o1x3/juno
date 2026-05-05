@@ -211,8 +211,9 @@ const sessionsCommand = defineCommand({
     const config = resolveConfig();
     const sessions = await listSessions(config.sessionsDir);
     for (const session of sessions) {
+      const name = session.name ?? '';
       process.stdout.write(
-        `${session.id}\t${session.updatedAt}\t${session.eventCount}\n`,
+        `${session.id}\t${session.updatedAt}\t${session.eventCount}\t${name}\n`,
       );
     }
   },

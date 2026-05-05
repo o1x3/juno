@@ -21,6 +21,20 @@ export async function appendSessionEvent(
   await appendFile(path, `${JSON.stringify(event)}\n`, 'utf8');
 }
 
+export async function appendSessionMeta(
+  sessionsDir: string,
+  sessionId: string,
+  name: string,
+  source: 'auto' | 'manual',
+): Promise<void> {
+  await appendSessionEvent(sessionsDir, sessionId, {
+    type: 'session_meta',
+    timestamp: new Date().toISOString(),
+    name,
+    source,
+  });
+}
+
 export async function readSessionEvents(
   sessionsDir: string,
   sessionId: string,
@@ -32,6 +46,16 @@ export async function readSessionEvents(
     .map((line) => line.trim())
     .filter(Boolean)
     .map((line) => JSON.parse(line) as SessionEvent);
+}
+
+export function findSessionName(events: SessionEvent[]): string | undefined {
+  let name: string | undefined;
+  for (const event of events) {
+    if (event.type === 'session_meta') {
+      name = event.name;
+    }
+  }
+  return name;
 }
 
 export function restoreMessages(events: SessionEvent[]): SerializedMessage[] {
@@ -74,6 +98,7 @@ export async function listSessions(
       path: sessionPath(sessionsDir, id),
       updatedAt: events.at(-1)?.timestamp ?? '',
       eventCount: events.length,
+      name: findSessionName(events),
     });
   }
 
