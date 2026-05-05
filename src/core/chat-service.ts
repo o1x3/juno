@@ -1,5 +1,6 @@
 import { createApiKeyCredential, extractAccountIdFromJwt } from '@/auth/codex';
 import {
+  DEFAULT_REFRESH_SKEW_MS,
   loadCredential,
   refreshCredentialIfNearExpiry,
   resolveCredential,
@@ -24,6 +25,7 @@ import type {
   AgentConfig,
   AgentTurnResult,
   AuthMode,
+  AuthStatus,
   ModelClient,
   ModelFallback,
 } from '@/types';
@@ -204,6 +206,73 @@ export async function resolveAuthSummary(config: AgentConfig): Promise<{
   } catch {
     return { authMode: 'none', activeModel: config.model };
   }
+}
+
+function partialAccountId(accountId: string): string {
+  const trimmed = accountId.trim();
+  if (trimmed.length <= 4) {
+    return `…${trimmed}`;
+  }
+  return `…${trimmed.slice(-4)}`;
+}
+
+export async function resolveAuthStatus(
+  config: AgentConfig,
+): Promise<AuthStatus> {
+  const stored = await loadCredential(config.authFile);
+  const summary = await resolveAuthSummary(config);
+
+  let source: AuthStatus['source'];
+  if (config.apiKey) {
+    source = 'env';
+  } else if (stored) {
+    source = 'stored';
+  } else {
+    source = 'none';
+  }
+
+  const credentialType = config.apiKey ? ('api-key' as const) : stored?.type;
+
+  let accountId: string | undefined;
+  if (stored?.type === 'oauth') {
+    accountId = stored.accountId ?? extractAccountIdFromJwt(stored.accessToken);
+  }
+
+  let expiresAt: string | undefined;
+  let expiresInSeconds: number | undefined;
+  let refreshDueSoon: boolean | undefined;
+  if (stored?.type === 'oauth' && stored.expiresAt) {
+    expiresAt = stored.expiresAt;
+    const expiresAtMs = Date.parse(stored.expiresAt);
+    if (!Number.isNaN(expiresAtMs)) {
+      expiresInSeconds = Math.round((expiresAtMs - Date.now()) / 1000);
+      refreshDueSoon = expiresAtMs - Date.now() <= DEFAULT_REFRESH_SKEW_MS;
+    }
+  }
+
+  const provider: AuthStatus['provider'] = source === 'none' ? 'none' : 'codex';
+
+  const status: AuthStatus = {
+    authMode: summary.authMode,
+    provider,
+    source,
+    authFile: config.authFile,
+    credentialType,
+    accountIdPresent: Boolean(accountId),
+    accountIdPartial: accountId ? partialAccountId(accountId) : undefined,
+    expiresAt,
+    expiresInSeconds,
+    refreshDueSoon,
+    configuredModel: config.model,
+    activeModel: summary.activeModel,
+    modelFallback: summary.modelFallback,
+  };
+
+  if (summary.authMode === 'none') {
+    status.hint = 'Run `juno login` or set OPENAI_API_KEY.';
+  }
+
+  return status;
 }
 
 export function normalizeApiKey(value: string): string {
