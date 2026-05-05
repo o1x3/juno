@@ -193,6 +193,30 @@ export function Composer(props: ComposerProps) {
       const ls = splitLines(valueRef.current);
       const c = cursorRef.current;
 
+      // Optional: when JUNO_DEBUG_KEYS is set, append every key event to
+      // /tmp/juno-keys.log so we can see what Ink actually delivers for a
+      // given physical key. Useful for debugging terminal-specific quirks
+      // (e.g. macOS plain backspace not being recognised).
+      if (process.env.JUNO_DEBUG_KEYS) {
+        try {
+          const hex = [...input]
+            .map((c) => c.charCodeAt(0).toString(16).padStart(2, '0'))
+            .join(' ');
+          const flags = Object.entries(key)
+            .filter(([_, v]) => v)
+            .map(([k]) => k)
+            .join(',');
+          import('node:fs').then((fs) => {
+            fs.appendFileSync(
+              '/tmp/juno-keys.log',
+              `${new Date().toISOString()} input.len=${input.length} hex=[${hex}] flags=${flags || 'none'}\n`,
+            );
+          });
+        } catch {
+          // ignore
+        }
+      }
+
       // Some terminals send DEL (0x7f) or BS (0x08) for the backspace key
       // without triggering Ink's `key.backspace`. Detect explicitly so the
       // raw byte never falls through into the plain-input branch and gets
@@ -200,7 +224,15 @@ export function Composer(props: ComposerProps) {
       const inputCode = input.length === 1 ? input.charCodeAt(0) : -1;
       const isBackspace =
         key.backspace || inputCode === 0x7f || inputCode === 0x08;
-      const isDelete = key.delete;
+      // Treat Ink's `key.delete` as backspace too. On macOS the single
+      // physical key above Return (labelled "delete") sends `\x7f` and is
+      // logically backspace; some Ink/Bun combinations classify that as
+      // `key.delete = true` instead of `key.backspace = true`. Forward
+      // delete (fn+delete on Mac, dedicated Delete on full keyboards)
+      // already lives on `\x1b[3~` and is rare enough that being off by
+      // one direction here is the right tradeoff.
+      const isDelete = false;
+      const isAnyDelete = isBackspace || key.delete;
 
       // Cancel/exit: bubble up.
       if (key.escape) {
@@ -251,7 +283,7 @@ export function Composer(props: ComposerProps) {
       }
 
       // Backspace: at empty composer + bash/palette mode → exit.
-      if (isBackspace || isDelete) {
+      if (isAnyDelete || isDelete) {
         lastActionRef.current = 'edit';
         if (valueRef.current.length === 0) {
           onEmptyBackspace?.();
