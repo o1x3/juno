@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { saveCredential } from '@/auth/storage';
 import { resolveAuthStatus } from '@/core/chat-service';
 import { resetCodexRegistryCache } from '@/core/codex-models';
-import type { AgentConfig } from '@/types';
+import type { AgentConfig, CredentialRecord } from '@/types';
 
 let workspace = '';
 
@@ -218,6 +218,59 @@ describe('resolveAuthStatus', () => {
     expect(cli.exitCode).toBe(0);
     expect(stdout).toContain('auth: none');
     expect(stdout).toContain('Run `juno login` or set OPENAI_API_KEY.');
+  });
+
+  test('within-skew refresh: printed status reflects the refreshed credential, not the stale snapshot', async () => {
+    // Pre-stored credential is within the 5-minute refresh window.
+    const STALE_ACCOUNT_ID = 'acct-stale-0000-0000-0000-stale123';
+    const STALE_EXPIRES_AT = new Date(Date.now() + 60 * 1000).toISOString();
+    const REFRESHED_ACCOUNT_ID = 'acct-fresh-1111-1111-1111-fresh999';
+    const REFRESHED_EXPIRES_AT_MS = Date.now() + 3600 * 1000;
+    const REFRESHED_EXPIRES_AT = new Date(
+      REFRESHED_EXPIRES_AT_MS,
+    ).toISOString();
+
+    await saveCredential(join(workspace, 'auth.json'), {
+      provider: 'codex',
+      type: 'oauth',
+      accessToken: 'stale-access',
+      refreshToken: 'rt',
+      apiKey: 'sk-from-exchange',
+      accountId: STALE_ACCOUNT_ID,
+      expiresAt: STALE_EXPIRES_AT,
+      createdAt: new Date(Date.now() - 3600 * 1000).toISOString(),
+    });
+
+    let refresherCalls = 0;
+    const refreshed: CredentialRecord = {
+      provider: 'codex',
+      type: 'oauth',
+      accessToken: 'fresh-access',
+      refreshToken: 'rt-new',
+      apiKey: 'sk-from-exchange',
+      accountId: REFRESHED_ACCOUNT_ID,
+      expiresAt: REFRESHED_EXPIRES_AT,
+      createdAt: new Date(Date.now() - 3600 * 1000).toISOString(),
+    };
+
+    const status = await resolveAuthStatus(makeConfig(), {
+      refresher: async () => {
+        refresherCalls += 1;
+        return refreshed;
+      },
+    });
+
+    expect(refresherCalls).toBe(1);
+    expect(status.authMode).toBe('oauth-api-key');
+    // The bug being guarded against: status used to derive these fields
+    // from the pre-refresh snapshot loaded BEFORE resolveAuthSummary ran.
+    expect(status.expiresAt).toBe(REFRESHED_EXPIRES_AT);
+    expect(status.expiresAt).not.toBe(STALE_EXPIRES_AT);
+    expect(status.accountIdPartial).toBe(`…${REFRESHED_ACCOUNT_ID.slice(-4)}`);
+    expect(status.accountIdPartial).not.toBe(`…${STALE_ACCOUNT_ID.slice(-4)}`);
+    // Refreshed credential expires in ~1h, well outside the 5-min window.
+    expect(status.refreshDueSoon).toBe(false);
+    expect((status.expiresInSeconds ?? 0) > 1800).toBe(true);
   });
 
   test('reports authMode none and surfaces stored expiry when oauth credential lacks accountId and JWT claim', async () => {

@@ -116,7 +116,7 @@ Opens the Ink UI with an existing session. The session id is the file name (with
 
 ### `juno auth status`
 
-Prints a concise, user-facing snapshot of the current auth and routing state. Read-only — does not mutate `auth.json`. It does invoke the same routing path the chat code uses, so if the stored OAuth token is within the 5-minute refresh window it can trigger a token refresh against `https://auth.openai.com/oauth/token` (the same call `juno chat` would make on its next turn).
+Prints a concise, user-facing snapshot of the current auth and routing state. It runs the same routing path the chat code uses, which means: if the stored OAuth token is within the 5-minute refresh window, the command will hit `https://auth.openai.com/oauth/token` to refresh it and rewrite `auth.json` in place — exactly the side effect `juno chat` would produce on its next turn. Outside that window it does not write to disk. The printed status always reflects the credential as it stands after any refresh that happened during the call, never the pre-refresh snapshot.
 
 Fields:
 - `auth` — `none` | `api-key` | `oauth-api-key` | `oauth-codex`.

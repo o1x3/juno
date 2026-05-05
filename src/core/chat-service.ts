@@ -2,6 +2,7 @@ import { createApiKeyCredential, extractAccountIdFromJwt } from '@/auth/codex';
 import {
   DEFAULT_REFRESH_SKEW_MS,
   loadCredential,
+  type RefreshOptions,
   refreshCredentialIfNearExpiry,
   resolveCredential,
 } from '@/auth/storage';
@@ -51,11 +52,18 @@ type RoutingResolution = {
   modelFallback?: ModelFallback;
 };
 
-async function resolveRouting(config: AgentConfig): Promise<RoutingResolution> {
+async function resolveRouting(
+  config: AgentConfig,
+  refreshOptions?: RefreshOptions,
+): Promise<RoutingResolution> {
   const stored = await loadCredential(config.authFile);
   let refreshed: typeof stored;
   try {
-    refreshed = await refreshCredentialIfNearExpiry(config.authFile, stored);
+    refreshed = await refreshCredentialIfNearExpiry(
+      config.authFile,
+      stored,
+      refreshOptions,
+    );
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     throw new Error(
@@ -191,13 +199,16 @@ export async function startOrResumeChat(
   };
 }
 
-export async function resolveAuthSummary(config: AgentConfig): Promise<{
+export async function resolveAuthSummary(
+  config: AgentConfig,
+  refreshOptions?: RefreshOptions,
+): Promise<{
   authMode: AuthMode;
   activeModel: string;
   modelFallback?: ModelFallback;
 }> {
   try {
-    const routing = await resolveRouting(config);
+    const routing = await resolveRouting(config, refreshOptions);
     return {
       authMode: routing.authMode,
       activeModel: routing.activeModel,
@@ -218,9 +229,15 @@ function partialAccountId(accountId: string): string {
 
 export async function resolveAuthStatus(
   config: AgentConfig,
+  refreshOptions?: RefreshOptions,
 ): Promise<AuthStatus> {
+  // resolveAuthSummary -> resolveRouting -> refreshCredentialIfNearExpiry
+  // can refresh and persist a new credential when the token is within the
+  // skew window. Run it first, THEN load the credential, so account-id /
+  // expiresAt / refreshDueSoon reflect the post-refresh state on disk
+  // rather than the stale snapshot we read going in.
+  const summary = await resolveAuthSummary(config, refreshOptions);
   const stored = await loadCredential(config.authFile);
-  const summary = await resolveAuthSummary(config);
 
   let source: AuthStatus['source'];
   if (config.apiKey) {
