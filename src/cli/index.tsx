@@ -260,10 +260,20 @@ const main = defineCommand({
 const rawArgs = process.argv.slice(2);
 const subCommandNames = new Set(Object.keys(main.subCommands ?? {}));
 const firstPositionalArg = rawArgs.find((arg) => !arg.startsWith('-'));
-const isMetaInvocation =
-  rawArgs.includes('--help') ||
-  rawArgs.includes('-h') ||
-  (rawArgs.length === 1 && rawArgs[0] === '--version');
+
+// Handle --version / -v ourselves. Citty routes --version through consola,
+// whose basic reporter (used on non-TTY stdout, i.e. CI and piped output)
+// prefixes lines with "[log] ". Print the bare version directly so scripts
+// can rely on exact-match comparisons.
+if (
+  rawArgs.length === 1 &&
+  (rawArgs[0] === '--version' || rawArgs[0] === '-v')
+) {
+  process.stdout.write(`${VERSION}\n`);
+  process.exit(0);
+}
+
+const isMetaInvocation = rawArgs.includes('--help') || rawArgs.includes('-h');
 
 const dispatchArgs =
   isMetaInvocation ||

@@ -5,10 +5,9 @@ import pkg from '../package.json' with { type: 'json' };
 
 const SCRIPT_PATH = join(import.meta.dir, '..', 'src', 'cli', 'index.tsx');
 
-// `bun test` sets NODE_ENV=test in the parent. The juno CLI uses citty,
-// which prints --version/--help via consola, and consola silences its
-// default reporter when NODE_ENV=test. Spawn the child with NODE_ENV
-// unset so the assertions reflect real-user behavior.
+// `bun test` sets NODE_ENV=test in the parent. Spawn the child with
+// NODE_ENV unset so the assertions reflect real-user behavior in CI
+// (non-TTY stdout) and locally.
 function childEnv(): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
@@ -24,7 +23,7 @@ describe('juno --version', () => {
     expect(VERSION).toBe(pkg.version);
   });
 
-  test('CLI prints the version and exits 0', () => {
+  test('CLI prints the bare version and exits 0', () => {
     const cli = Bun.spawnSync({
       cmd: [process.execPath, SCRIPT_PATH, '--version'],
       env: childEnv(),
@@ -32,25 +31,27 @@ describe('juno --version', () => {
       stderr: 'pipe',
     });
 
-    // citty prints --version through consola, which uses a "basic" reporter
-    // when stdout is not a TTY (CI). The basic reporter prefixes log lines
-    // with `[log] `, while the fancy reporter (local TTY) does not. Strip
-    // the prefix so the test passes in both environments without coupling
-    // to consola's reporter selection.
-    const stdout = cli.stdout
-      .toString()
-      .trim()
-      .replace(/^\[log\]\s*/, '');
-
     expect({
       exit: cli.exitCode,
-      stdout,
+      stdout: cli.stdout.toString(),
       stderr: cli.stderr.toString().trim(),
     }).toEqual({
       exit: 0,
-      stdout: pkg.version,
+      stdout: `${pkg.version}\n`,
       stderr: '',
     });
+  });
+
+  test('-v alias also prints the bare version', () => {
+    const cli = Bun.spawnSync({
+      cmd: [process.execPath, SCRIPT_PATH, '-v'],
+      env: childEnv(),
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+
+    expect(cli.exitCode).toBe(0);
+    expect(cli.stdout.toString()).toBe(`${pkg.version}\n`);
   });
 
   test('CLI --help still works after --version wiring', () => {
