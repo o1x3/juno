@@ -1,15 +1,31 @@
-import type { ProjectInstructionSet } from '@/types';
+import type { AgentMode, ProjectInstructionSet } from '@/types';
 
-export function buildSystemPrompt(instructions: ProjectInstructionSet): string {
+const PLAN_PREAMBLE = [
+  'PLAN MODE.',
+  'You can only call Read and Grep. Edit, Write, and Bash are unavailable this turn.',
+  'Do not propose tool calls that modify the workspace or run commands.',
+  'Read enough to understand the change, then end with a numbered plan and an explicit handoff line: "Switch to exec mode (Shift+Tab) to execute."',
+].join(' ');
+
+export function buildSystemPrompt(
+  instructions: ProjectInstructionSet,
+  mode: AgentMode = 'exec',
+): string {
   const instructionBlock = instructions.mergedContent
     ? `Project instructions:\n${instructions.mergedContent}`
     : 'Project instructions: none';
 
-  return [
+  const sections = [
     'You are Juno, a local coding agent running in a Bun/TypeScript CLI.',
     'Be direct, critical, and specific.',
     'Use the provided tools when file reads, edits, shell commands, or search are needed.',
     'Prefer minimal reliable changes.',
-    instructionBlock,
-  ].join('\n\n');
+  ];
+
+  if (mode === 'plan') {
+    sections.push(PLAN_PREAMBLE);
+  }
+
+  sections.push(instructionBlock);
+  return sections.join('\n\n');
 }

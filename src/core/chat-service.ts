@@ -14,34 +14,42 @@ import {
 import { createCodexResponsesClient } from '@/core/codex-responses-client';
 import { loadProjectInstructions } from '@/core/instructions';
 import { createAiSdkModelClient } from '@/core/model-client';
+import { generateSessionName, type NamingDeps } from '@/core/naming';
 import { buildSystemPrompt } from '@/core/prompt';
 import {
   appendSessionEvent,
+  appendSessionMeta,
   createSessionId,
+  findSessionName,
   readSessionEvents,
   restoreMessages,
 } from '@/core/session-store';
 import { createBuiltinTools } from '@/core/tools';
 import type {
   AgentConfig,
+  AgentMode,
   AgentTurnResult,
   AuthMode,
   AuthStatus,
   ModelClient,
   ModelFallback,
+  ModelUsage,
+  ToolCall,
+  ToolResult,
+  ToolSpec,
 } from '@/types';
 
 type ChatOptions = {
   config: AgentConfig;
   prompt: string;
   sessionId?: string;
+  mode?: AgentMode;
   onTextDelta?: (delta: string) => void;
-  onToolCall?: AgentTurnResult['toolCalls'][number] extends infer T
-    ? (call: T) => void
-    : never;
-  onToolResult?: AgentTurnResult['toolResults'][number] extends infer T
-    ? (result: T) => void
-    : never;
+  onToolCall?: (call: ToolCall) => void;
+  onToolResult?: (result: ToolResult) => void;
+  onUsage?: (usage: ModelUsage) => void;
+  onSessionName?: (name: string) => void;
+  namingDeps?: NamingDeps;
 };
 
 type RoutingResolution = {
@@ -51,6 +59,18 @@ type RoutingResolution = {
   activeModel: string;
   modelFallback?: ModelFallback;
 };
+
+function pickModelForMode(config: AgentConfig, mode: AgentMode): string {
+  if (mode === 'plan') return config.planModel;
+  return config.execModel;
+}
+
+function filterToolsForMode(tools: ToolSpec[], mode: AgentMode): ToolSpec[] {
+  if (mode === 'plan') {
+    return tools.filter((t) => t.name === 'Read' || t.name === 'Grep');
+  }
+  return tools;
+}
 
 async function resolveRouting(
   config: AgentConfig,
@@ -149,44 +169,77 @@ export async function startOrResumeChat(
   options: ChatOptions,
 ): Promise<{ sessionId: string; result: AgentTurnResult }> {
   const config = options.config;
+  const mode: AgentMode = options.mode ?? 'exec';
+  const turnModel = pickModelForMode(config, mode);
+  const isFreshSession = !options.sessionId;
   const sessionId = options.sessionId ?? createSessionId();
   const events = options.sessionId
     ? await readSessionEvents(config.sessionsDir, sessionId)
     : [];
   const messages = restoreMessages(events);
+  const existingName = findSessionName(events);
+  if (existingName) options.onSessionName?.(existingName);
 
-  if (!options.sessionId) {
+  if (isFreshSession) {
     await appendSessionEvent(config.sessionsDir, sessionId, {
       type: 'status_meta',
       timestamp: new Date().toISOString(),
       status: 'session_started',
       sessionId,
       cwd: config.cwd,
-      model: config.model,
+      model: turnModel,
     });
   }
 
-  const routing = await resolveRouting(config);
+  const configForRouting = { ...config, model: turnModel };
+  const routing = await resolveRouting(configForRouting);
 
   const instructions = await loadProjectInstructions(config.cwd);
-  const systemPrompt = buildSystemPrompt(instructions);
+  const systemPrompt = buildSystemPrompt(instructions, mode);
+  const allTools = createBuiltinTools({
+    cwd: routing.runtimeConfig.cwd,
+    outputLimit: routing.runtimeConfig.toolOutputLimit,
+    readLineLimit: routing.runtimeConfig.readLineLimit,
+    bashTimeoutMs: routing.runtimeConfig.bashTimeoutMs,
+  });
+  const tools = filterToolsForMode(allTools, mode);
+
   const result = await runAgentTurn({
     config: routing.runtimeConfig,
     sessionId,
+    model: routing.activeModel,
     systemPrompt,
     userInput: options.prompt,
     messages,
-    tools: createBuiltinTools({
-      cwd: routing.runtimeConfig.cwd,
-      outputLimit: routing.runtimeConfig.toolOutputLimit,
-      readLineLimit: routing.runtimeConfig.readLineLimit,
-      bashTimeoutMs: routing.runtimeConfig.bashTimeoutMs,
-    }),
+    tools,
     modelClient: routing.modelClient,
     onTextDelta: options.onTextDelta,
-    onToolCall: options.onToolCall as never,
-    onToolResult: options.onToolResult as never,
+    onToolCall: options.onToolCall,
+    onToolResult: options.onToolResult,
+    onUsage: options.onUsage,
   });
+
+  if (isFreshSession && config.autoName && !existingName) {
+    void (async () => {
+      const name = await generateSessionName(
+        options.prompt,
+        config,
+        options.namingDeps,
+      );
+      const finalName = name ?? sessionId;
+      try {
+        await appendSessionMeta(
+          config.sessionsDir,
+          sessionId,
+          finalName,
+          name ? 'auto' : 'manual',
+        );
+        options.onSessionName?.(finalName);
+      } catch {
+        // ignore
+      }
+    })();
+  }
 
   return {
     sessionId,
@@ -231,11 +284,6 @@ export async function resolveAuthStatus(
   config: AgentConfig,
   refreshOptions?: RefreshOptions,
 ): Promise<AuthStatus> {
-  // resolveAuthSummary -> resolveRouting -> refreshCredentialIfNearExpiry
-  // can refresh and persist a new credential when the token is within the
-  // skew window. Run it first, THEN load the credential, so account-id /
-  // expiresAt / refreshDueSoon reflect the post-refresh state on disk
-  // rather than the stale snapshot we read going in.
   const summary = await resolveAuthSummary(config, refreshOptions);
   const stored = await loadCredential(config.authFile);
 

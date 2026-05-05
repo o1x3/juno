@@ -6,11 +6,20 @@ import { extractAccountIdFromJwt } from '@/auth/codex';
 import type {
   ModelClient,
   ModelStep,
+  ModelUsage,
   SerializedMessage,
   ToolCall,
   ToolName,
   ToolSpec,
 } from '@/types';
+
+function estimateUsage(input: string, output: string): ModelUsage {
+  return {
+    input: Math.ceil(input.length / 4),
+    output: Math.ceil(output.length / 4),
+    estimated: true,
+  };
+}
 
 const KNOWN_TOOL_NAMES: ReadonlySet<ToolName> = new Set([
   'Read',
@@ -271,6 +280,7 @@ export function createCodexResponsesClient(
       tools,
       onTextDelta,
       onToolCall,
+      onUsage,
     }): Promise<ModelStep> {
       const accountId =
         config.accountId.length > 0
@@ -435,10 +445,19 @@ export function createCodexResponsesClient(
         }
       }
 
+      const inputForEstimate = `${systemPrompt}\n${messages
+        .map((m) =>
+          m.role === 'user' || m.role === 'assistant' ? (m.content ?? '') : '',
+        )
+        .join('\n')}`;
+      const usage = estimateUsage(inputForEstimate, text);
+      onUsage?.(usage);
+
       return {
         text,
         toolCalls: seenToolCalls,
         finishReason,
+        usage,
       };
     },
   };

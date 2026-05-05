@@ -1,0 +1,413 @@
+import { Box, Text, useInput, useStdin } from 'ink';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { softWrap } from '@/ui/format';
+import { attachPasteListener } from '@/ui/stdin-paste';
+import { colors, type ThemeColor } from '@/ui/theme';
+
+export type ComposerVisualMode = 'exec' | 'plan' | 'bash' | 'palette';
+
+export type ComposerProps = {
+  value: string;
+  visualMode: ComposerVisualMode;
+  width: number;
+  history: string[];
+  placeholder?: string;
+  isActive: boolean;
+  onChange: (value: string) => void;
+  onSubmit: (value: string) => void;
+  onCancel?: () => void;
+  onEmptyBackspace?: () => void;
+  onModeToggle?: () => void;
+  onArrowUpAtTop?: () => void;
+  onArrowDownAtBottom?: () => void;
+};
+
+type Cursor = { line: number; col: number };
+
+function splitLines(text: string): string[] {
+  return text.split('\n');
+}
+
+function joinLines(lines: string[]): string {
+  return lines.join('\n');
+}
+
+function modePrefix(mode: ComposerVisualMode): {
+  glyph: string;
+  color: ThemeColor;
+} {
+  switch (mode) {
+    case 'plan':
+      return { glyph: '◆', color: colors.plan };
+    case 'bash':
+      return { glyph: '$', color: colors.bash };
+    case 'palette':
+      return { glyph: '/', color: colors.accent };
+    default:
+      return { glyph: '▌', color: colors.accent };
+  }
+}
+
+function findPrevWordBoundary(line: string, col: number): number {
+  if (col <= 0) return 0;
+  let i = col - 1;
+  while (i > 0 && /\s/.test(line[i] ?? '')) i -= 1;
+  while (i > 0 && !/\s/.test(line[i - 1] ?? '')) i -= 1;
+  return i;
+}
+
+export function Composer(props: ComposerProps) {
+  const {
+    value,
+    visualMode,
+    width,
+    history,
+    placeholder,
+    isActive,
+    onChange,
+    onSubmit,
+    onCancel,
+    onEmptyBackspace,
+    onModeToggle,
+    onArrowUpAtTop,
+    onArrowDownAtBottom,
+  } = props;
+
+  const [cursor, setCursor] = useState<Cursor>({ line: 0, col: 0 });
+  const [historyIdx, setHistoryIdx] = useState<number>(-1);
+  const valueRef = useRef(value);
+  valueRef.current = value;
+  const cursorRef = useRef(cursor);
+  cursorRef.current = cursor;
+
+  const lines = useMemo(() => splitLines(value), [value]);
+  const innerWidth = Math.max(10, width - 4); // leave room for border + glyph
+
+  // Keep cursor inside bounds whenever value changes (e.g. external set).
+  useEffect(() => {
+    setCursor((c) => {
+      const ls = splitLines(valueRef.current);
+      const line = Math.min(c.line, Math.max(0, ls.length - 1));
+      const col = Math.min(c.col, ls[line]?.length ?? 0);
+      return line === c.line && col === c.col ? c : { line, col };
+    });
+  }, []);
+
+  const apply = useCallback(
+    (next: string, nextCursor: Cursor) => {
+      onChange(next);
+      setCursor(nextCursor);
+    },
+    [onChange],
+  );
+
+  const insertText = useCallback(
+    (text: string) => {
+      const sanitized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+      const ls = splitLines(valueRef.current);
+      const c = cursorRef.current;
+      const head = (ls[c.line] ?? '').slice(0, c.col);
+      const tail = (ls[c.line] ?? '').slice(c.col);
+      const inserted = splitLines(sanitized);
+      let newCursor: Cursor;
+      let newLines: string[];
+      const firstChunk = inserted[0] ?? '';
+      const lastChunk = inserted[inserted.length - 1] ?? '';
+      if (inserted.length === 1) {
+        newLines = [...ls];
+        newLines[c.line] = head + firstChunk + tail;
+        newCursor = { line: c.line, col: head.length + firstChunk.length };
+      } else {
+        const before = ls.slice(0, c.line);
+        const after = ls.slice(c.line + 1);
+        const first = head + firstChunk;
+        const middle = inserted.slice(1, -1);
+        const last = lastChunk + tail;
+        newLines = [...before, first, ...middle, last, ...after];
+        newCursor = {
+          line: c.line + inserted.length - 1,
+          col: lastChunk.length,
+        };
+      }
+      apply(joinLines(newLines), newCursor);
+    },
+    [apply],
+  );
+
+  // Bracketed paste from stdin.
+  const { stdin } = useStdin();
+  useEffect(() => {
+    if (!isActive || !stdin) return;
+    const handle = attachPasteListener(stdin, (text) => {
+      insertText(text);
+    });
+    return () => handle.dispose();
+  }, [isActive, stdin, insertText]);
+
+  const submitCurrent = useCallback(() => {
+    const text = valueRef.current;
+    if (text.trim().length === 0) return;
+    onSubmit(text);
+    setHistoryIdx(-1);
+    setCursor({ line: 0, col: 0 });
+  }, [onSubmit]);
+
+  const moveTo = useCallback((c: Cursor) => setCursor(c), []);
+
+  const isAtTop = (c: Cursor) => c.line === 0;
+  const isAtBottom = (c: Cursor, ls: string[]) => c.line === ls.length - 1;
+
+  useInput(
+    (input, key) => {
+      const ls = splitLines(valueRef.current);
+      const c = cursorRef.current;
+
+      // Cancel/exit: bubble up.
+      if (key.escape) {
+        onCancel?.();
+        return;
+      }
+
+      // Mode toggle (Shift+Tab).
+      if (key.tab && key.shift) {
+        onModeToggle?.();
+        return;
+      }
+
+      // Submit on Enter.
+      if (key.return && !key.shift && !key.meta) {
+        submitCurrent();
+        return;
+      }
+
+      // Newline on Ctrl+J.
+      if (key.ctrl && input === 'j') {
+        const head = (ls[c.line] ?? '').slice(0, c.col);
+        const tail = (ls[c.line] ?? '').slice(c.col);
+        const next = [
+          ...ls.slice(0, c.line),
+          head,
+          tail,
+          ...ls.slice(c.line + 1),
+        ];
+        apply(joinLines(next), { line: c.line + 1, col: 0 });
+        return;
+      }
+
+      // Backspace: at empty composer + bash/palette mode → exit.
+      if (key.backspace || key.delete) {
+        if (valueRef.current.length === 0) {
+          onEmptyBackspace?.();
+          return;
+        }
+        if (key.delete) {
+          // Delete forward (Ctrl+D too)
+          const cur = ls[c.line] ?? '';
+          if (c.col < cur.length) {
+            const next = [...ls];
+            next[c.line] = cur.slice(0, c.col) + cur.slice(c.col + 1);
+            apply(joinLines(next), c);
+          } else if (c.line < ls.length - 1) {
+            const next = [...ls];
+            next[c.line] = (ls[c.line] ?? '') + (ls[c.line + 1] ?? '');
+            next.splice(c.line + 1, 1);
+            apply(joinLines(next), c);
+          }
+          return;
+        }
+        // Backspace
+        if (c.col > 0) {
+          const cur = ls[c.line] ?? '';
+          const next = [...ls];
+          next[c.line] = cur.slice(0, c.col - 1) + cur.slice(c.col);
+          apply(joinLines(next), { line: c.line, col: c.col - 1 });
+        } else if (c.line > 0) {
+          const prev = ls[c.line - 1] ?? '';
+          const cur = ls[c.line] ?? '';
+          const next = [
+            ...ls.slice(0, c.line - 1),
+            prev + cur,
+            ...ls.slice(c.line + 1),
+          ];
+          apply(joinLines(next), { line: c.line - 1, col: prev.length });
+        }
+        return;
+      }
+
+      // Ctrl+W: delete previous word
+      if (key.ctrl && input === 'w') {
+        const cur = ls[c.line] ?? '';
+        const newCol = findPrevWordBoundary(cur, c.col);
+        if (newCol === c.col) return;
+        const next = [...ls];
+        next[c.line] = cur.slice(0, newCol) + cur.slice(c.col);
+        apply(joinLines(next), { line: c.line, col: newCol });
+        return;
+      }
+
+      // Ctrl+K: kill to line end
+      if (key.ctrl && input === 'k') {
+        const cur = ls[c.line] ?? '';
+        if (c.col >= cur.length) return;
+        const next = [...ls];
+        next[c.line] = cur.slice(0, c.col);
+        apply(joinLines(next), c);
+        return;
+      }
+
+      // Ctrl+U: kill to line start
+      if (key.ctrl && input === 'u') {
+        const cur = ls[c.line] ?? '';
+        if (c.col <= 0) return;
+        const next = [...ls];
+        next[c.line] = cur.slice(c.col);
+        apply(joinLines(next), { line: c.line, col: 0 });
+        return;
+      }
+
+      // Ctrl+A / Home
+      if ((key.ctrl && input === 'a') || key.home) {
+        moveTo({ line: c.line, col: 0 });
+        return;
+      }
+
+      // Ctrl+E / End
+      if ((key.ctrl && input === 'e') || key.end) {
+        moveTo({ line: c.line, col: (ls[c.line] ?? '').length });
+        return;
+      }
+
+      // Arrow movement
+      if (key.leftArrow) {
+        if (c.col > 0) moveTo({ line: c.line, col: c.col - 1 });
+        else if (c.line > 0)
+          moveTo({ line: c.line - 1, col: (ls[c.line - 1] ?? '').length });
+        return;
+      }
+      if (key.rightArrow) {
+        const cur = ls[c.line] ?? '';
+        if (c.col < cur.length) moveTo({ line: c.line, col: c.col + 1 });
+        else if (c.line < ls.length - 1) moveTo({ line: c.line + 1, col: 0 });
+        return;
+      }
+      if (key.upArrow) {
+        if (isAtTop(c)) {
+          // history
+          if (history.length === 0) return;
+          const next = Math.min(history.length - 1, historyIdx + 1);
+          setHistoryIdx(next);
+          const item = history[history.length - 1 - next] ?? '';
+          onChange(item);
+          const itemLines = splitLines(item);
+          setCursor({
+            line: itemLines.length - 1,
+            col: (itemLines[itemLines.length - 1] ?? '').length,
+          });
+          onArrowUpAtTop?.();
+        } else {
+          const targetLine = c.line - 1;
+          moveTo({
+            line: targetLine,
+            col: Math.min(c.col, (ls[targetLine] ?? '').length),
+          });
+        }
+        return;
+      }
+      if (key.downArrow) {
+        if (isAtBottom(c, ls)) {
+          if (historyIdx <= -1) {
+            onArrowDownAtBottom?.();
+            return;
+          }
+          const next = historyIdx - 1;
+          setHistoryIdx(next);
+          const item =
+            next < 0 ? '' : (history[history.length - 1 - next] ?? '');
+          onChange(item);
+          const itemLines = splitLines(item);
+          setCursor({
+            line: itemLines.length - 1,
+            col: (itemLines[itemLines.length - 1] ?? '').length,
+          });
+        } else {
+          const targetLine = c.line + 1;
+          moveTo({
+            line: targetLine,
+            col: Math.min(c.col, (ls[targetLine] ?? '').length),
+          });
+        }
+        return;
+      }
+
+      // Plain typed character.
+      if (input && !key.ctrl && !key.meta) {
+        insertText(input);
+      }
+    },
+    { isActive },
+  );
+
+  const prefix = modePrefix(visualMode);
+  const showPlaceholder = value.length === 0 && placeholder;
+
+  // Wrap visible lines and inject cursor.
+  const renderedLines: { text: string; cursorAt?: number }[] = [];
+  if (showPlaceholder) {
+    renderedLines.push({ text: placeholder });
+  } else {
+    lines.forEach((line, lineIdx) => {
+      const wrapped = softWrap(line, innerWidth);
+      let charsBefore = 0;
+      wrapped.forEach((segment) => {
+        const segmentLen = segment.length;
+        let cursorAt: number | undefined;
+        if (
+          lineIdx === cursor.line &&
+          cursor.col >= charsBefore &&
+          cursor.col <= charsBefore + segmentLen
+        ) {
+          cursorAt = cursor.col - charsBefore;
+        }
+        renderedLines.push({ text: segment, cursorAt });
+        charsBefore += segmentLen;
+      });
+      // Empty logical line: still render an empty visible line.
+      if (wrapped.length === 0) {
+        renderedLines.push({
+          text: '',
+          cursorAt: lineIdx === cursor.line ? 0 : undefined,
+        });
+      }
+    });
+  }
+
+  return (
+    <Box
+      flexDirection="column"
+      borderStyle="round"
+      borderColor={prefix.color}
+      paddingX={1}
+    >
+      {renderedLines.map((line, idx) => (
+        <Box key={idx} flexDirection="row">
+          {idx === 0 ? (
+            <Text color={prefix.color}>{`${prefix.glyph} `}</Text>
+          ) : (
+            <Text color="gray">{`  `}</Text>
+          )}
+          {showPlaceholder ? (
+            <Text color="gray">{line.text}</Text>
+          ) : line.cursorAt !== undefined ? (
+            <Text>
+              {line.text.slice(0, line.cursorAt)}
+              <Text inverse>{line.text[line.cursorAt] ?? ' '}</Text>
+              {line.text.slice(line.cursorAt + 1)}
+            </Text>
+          ) : (
+            <Text>{line.text}</Text>
+          )}
+        </Box>
+      ))}
+    </Box>
+  );
+}

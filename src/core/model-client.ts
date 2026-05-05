@@ -5,6 +5,7 @@ import { tool as defineTool, streamText } from 'ai';
 import type {
   AgentConfig,
   ModelClient,
+  ModelUsage,
   SerializedMessage,
   ToolCall,
 } from '@/types';
@@ -60,6 +61,35 @@ export function toModelMessages(messages: SerializedMessage[]): ModelMessage[] {
   }) as ModelMessage[];
 }
 
+function normalizeUsage(raw: unknown): ModelUsage | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const r = raw as Record<string, unknown>;
+  const num = (v: unknown): number | undefined =>
+    typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+  const input =
+    num(r.inputTokens) ?? num(r.input_tokens) ?? num(r.promptTokens);
+  const output =
+    num(r.outputTokens) ?? num(r.output_tokens) ?? num(r.completionTokens);
+  if (input === undefined && output === undefined) return undefined;
+  const reasoning = num(r.reasoningTokens) ?? num(r.reasoning_tokens);
+  const cacheRead =
+    num(r.cachedInputTokens) ??
+    num(r.cached_input_tokens) ??
+    num(r.cacheReadInputTokens) ??
+    num(r.cache_read_input_tokens);
+  const cacheWrite =
+    num(r.cacheCreationInputTokens) ??
+    num(r.cache_creation_input_tokens) ??
+    num(r.cacheWriteInputTokens);
+  return {
+    input: input ?? 0,
+    output: output ?? 0,
+    reasoning,
+    cacheRead,
+    cacheWrite,
+  };
+}
+
 export function createAiSdkModelClient(config: AgentConfig): ModelClient {
   if (!config.apiKey) {
     throw new Error(
@@ -80,6 +110,7 @@ export function createAiSdkModelClient(config: AgentConfig): ModelClient {
       tools,
       onTextDelta,
       onToolCall,
+      onUsage,
     }) {
       const toolSet = Object.fromEntries(
         tools.map((spec) => [
@@ -118,10 +149,19 @@ export function createAiSdkModelClient(config: AgentConfig): ModelClient {
         }
       }
 
+      let usage: ModelUsage | undefined;
+      try {
+        usage = normalizeUsage(await result.usage);
+      } catch {
+        usage = undefined;
+      }
+      if (usage) onUsage?.(usage);
+
       return {
         text,
         toolCalls: seenToolCalls,
         finishReason: await result.finishReason,
+        usage,
       };
     },
   };

@@ -5,33 +5,69 @@ import { z } from 'zod';
 import { ensureParent, resolveInside, truncateText } from '@/core/fs';
 import type { ToolContext, ToolResult, ToolSpec } from '@/types';
 
-async function runBash(
+export type ShellResult = {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+  timedOut: boolean;
+};
+
+export type ShellOptions = {
+  cwd: string;
+  timeoutMs?: number;
+  outputLimit?: number;
+  signal?: AbortSignal;
+};
+
+export async function executeShellCommand(
   command: string,
-  context: ToolContext,
-): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  options: ShellOptions,
+): Promise<ShellResult> {
   const processHandle = Bun.spawn({
     cmd: ['bash', '-lc', command],
-    cwd: context.cwd,
+    cwd: options.cwd,
     stdout: 'pipe',
     stderr: 'pipe',
   });
 
-  const timeout = setTimeout(() => {
+  let timedOut = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  if (options.timeoutMs !== undefined) {
+    timer = setTimeout(() => {
+      timedOut = true;
+      processHandle.kill();
+    }, options.timeoutMs);
+  }
+
+  const onAbort = () => {
+    timedOut = false;
     processHandle.kill();
-  }, context.bashTimeoutMs);
-
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(processHandle.stdout).text(),
-    new Response(processHandle.stderr).text(),
-    processHandle.exited,
-  ]);
-  clearTimeout(timeout);
-
-  return {
-    stdout: truncateText(stdout, context.outputLimit),
-    stderr: truncateText(stderr, context.outputLimit),
-    exitCode,
   };
+  options.signal?.addEventListener('abort', onAbort, { once: true });
+
+  try {
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(processHandle.stdout).text(),
+      new Response(processHandle.stderr).text(),
+      processHandle.exited,
+    ]);
+
+    return {
+      stdout:
+        options.outputLimit !== undefined
+          ? truncateText(stdout, options.outputLimit)
+          : stdout,
+      stderr:
+        options.outputLimit !== undefined
+          ? truncateText(stderr, options.outputLimit)
+          : stderr,
+      exitCode,
+      timedOut,
+    };
+  } finally {
+    if (timer) clearTimeout(timer);
+    options.signal?.removeEventListener('abort', onAbort);
+  }
 }
 
 function ok(
@@ -163,8 +199,16 @@ export function createBuiltinTools(context: ToolContext): ToolSpec[] {
       execute: async (input) => {
         const toolCallId = String(input.toolCallId ?? crypto.randomUUID());
         try {
-          const result = await runBash(String(input.command), context);
-          return ok(toolCallId, 'Bash', result);
+          const result = await executeShellCommand(String(input.command), {
+            cwd: context.cwd,
+            timeoutMs: context.bashTimeoutMs,
+            outputLimit: context.outputLimit,
+          });
+          return ok(toolCallId, 'Bash', {
+            stdout: result.stdout,
+            stderr: result.stderr,
+            exitCode: result.exitCode,
+          });
         } catch (error) {
           return fail(
             toolCallId,
