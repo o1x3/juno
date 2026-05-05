@@ -1,8 +1,16 @@
-import { Box, Text, useInput, useStdin } from 'ink';
+import { Box, Text, useInput } from 'ink';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { softWrap } from '@/ui/format';
-import { attachPasteListener } from '@/ui/stdin-paste';
+import { KillRing } from '@/ui/kill-ring';
 import { colors, type ThemeColor } from '@/ui/theme';
+import { UndoStack } from '@/ui/undo-stack';
+
+type LastAction = 'kill-back' | 'kill-forward' | 'yank' | 'edit' | undefined;
+
+type EditorSnapshot = {
+  value: string;
+  cursor: { line: number; col: number };
+};
 
 export type ComposerVisualMode = 'exec' | 'plan' | 'bash' | 'palette';
 
@@ -85,6 +93,14 @@ export function Composer(props: ComposerProps) {
   valueRef.current = value;
   const cursorRef = useRef(cursor);
   cursorRef.current = cursor;
+  const killRingRef = useRef<KillRing>(new KillRing());
+  const undoStackRef = useRef<UndoStack<EditorSnapshot>>(
+    new UndoStack<EditorSnapshot>(),
+  );
+  const lastActionRef = useRef<LastAction>(undefined);
+  // Draft preserved when the user starts walking through history, so ↓ past
+  // the most-recent entry restores what they were composing.
+  const historyDraftRef = useRef<string>('');
 
   const lines = useMemo(() => splitLines(value), [value]);
   const innerWidth = Math.max(10, width - 4); // leave room for border + glyph
@@ -100,7 +116,17 @@ export function Composer(props: ComposerProps) {
   }, []);
 
   const apply = useCallback(
-    (next: string, nextCursor: Cursor) => {
+    (
+      next: string,
+      nextCursor: Cursor,
+      opts: { snapshot?: boolean } = { snapshot: true },
+    ) => {
+      if (opts.snapshot !== false) {
+        undoStackRef.current.push({
+          value: valueRef.current,
+          cursor: { ...cursorRef.current },
+        });
+      }
       onChange(next);
       setCursor(nextCursor);
     },
@@ -140,21 +166,14 @@ export function Composer(props: ComposerProps) {
     [apply],
   );
 
-  // Bracketed paste from stdin. Pin the callback in a ref so the effect
-  // attaches the listener exactly once per (active, stdin) pair — without
-  // this, `insertText` re-creates each render and the listener re-attaches,
-  // which is wasteful and historically caused interference with Ink's
-  // keypress parsing.
-  const insertTextRef = useRef(insertText);
-  insertTextRef.current = insertText;
-  const { stdin } = useStdin();
-  useEffect(() => {
-    if (!isActive || !stdin) return;
-    const handle = attachPasteListener(stdin, (text) => {
-      insertTextRef.current(text);
-    });
-    return () => handle.dispose();
-  }, [isActive, stdin]);
+  // Bracketed-paste detection used to attach a second `data` listener to
+  // process.stdin. Under Bun + macOS Terminal that listener seemed to interact
+  // with Ink's own stdin reader (raw `\x7f` = backspace stopped firing) so
+  // the listener is disabled. Multi-line paste falls back to per-character
+  // delivery; long lines may submit prematurely on lines that contain raw
+  // newlines, but the buffer/cursor stays consistent. We can revisit using
+  // a full StdinBuffer-style state machine that owns stdin instead of
+  // sharing it with Ink.
 
   const submitCurrent = useCallback(() => {
     const text = valueRef.current;
@@ -233,6 +252,7 @@ export function Composer(props: ComposerProps) {
 
       // Backspace: at empty composer + bash/palette mode → exit.
       if (isBackspace || isDelete) {
+        lastActionRef.current = 'edit';
         if (valueRef.current.length === 0) {
           onEmptyBackspace?.();
           return;
@@ -271,34 +291,97 @@ export function Composer(props: ComposerProps) {
         return;
       }
 
-      // Ctrl+W: delete previous word
+      // Ctrl+W: kill previous word.
       if (key.ctrl && input === 'w') {
         const cur = ls[c.line] ?? '';
         const newCol = findPrevWordBoundary(cur, c.col);
         if (newCol === c.col) return;
+        const killed = cur.slice(newCol, c.col);
+        killRingRef.current.push(killed, {
+          prepend: true,
+          accumulate: lastActionRef.current === 'kill-back',
+        });
+        lastActionRef.current = 'kill-back';
         const next = [...ls];
         next[c.line] = cur.slice(0, newCol) + cur.slice(c.col);
         apply(joinLines(next), { line: c.line, col: newCol });
         return;
       }
 
-      // Ctrl+K: kill to line end
+      // Ctrl+K: kill to line end.
       if (key.ctrl && input === 'k') {
         const cur = ls[c.line] ?? '';
         if (c.col >= cur.length) return;
+        const killed = cur.slice(c.col);
+        killRingRef.current.push(killed, {
+          prepend: false,
+          accumulate: lastActionRef.current === 'kill-forward',
+        });
+        lastActionRef.current = 'kill-forward';
         const next = [...ls];
         next[c.line] = cur.slice(0, c.col);
         apply(joinLines(next), c);
         return;
       }
 
-      // Ctrl+U: kill to line start
+      // Ctrl+U: kill to line start.
       if (key.ctrl && input === 'u') {
         const cur = ls[c.line] ?? '';
         if (c.col <= 0) return;
+        const killed = cur.slice(0, c.col);
+        killRingRef.current.push(killed, {
+          prepend: true,
+          accumulate: lastActionRef.current === 'kill-back',
+        });
+        lastActionRef.current = 'kill-back';
         const next = [...ls];
         next[c.line] = cur.slice(c.col);
         apply(joinLines(next), { line: c.line, col: 0 });
+        return;
+      }
+
+      // Ctrl+Y: yank most-recent kill at cursor.
+      if (key.ctrl && input === 'y') {
+        const yank = killRingRef.current.peek();
+        if (yank) {
+          insertText(yank);
+          lastActionRef.current = 'yank';
+        }
+        return;
+      }
+
+      // Alt+Y: cycle through older kills (only valid right after a yank).
+      if (!key.ctrl && key.meta && input === 'y') {
+        if (
+          lastActionRef.current !== 'yank' ||
+          killRingRef.current.length < 2
+        ) {
+          return;
+        }
+        // Replace the last yanked text with the next-older entry.
+        const prev = killRingRef.current.peek() ?? '';
+        killRingRef.current.rotate();
+        const replacement = killRingRef.current.peek() ?? '';
+        const cur = ls[c.line] ?? '';
+        const back = c.col - prev.length;
+        if (back < 0 || cur.slice(back, c.col) !== prev) return;
+        const next = [...ls];
+        next[c.line] = cur.slice(0, back) + replacement + cur.slice(c.col);
+        apply(joinLines(next), {
+          line: c.line,
+          col: back + replacement.length,
+        });
+        lastActionRef.current = 'yank';
+        return;
+      }
+
+      // Ctrl+Z: undo.
+      if (key.ctrl && input === 'z') {
+        const snap = undoStackRef.current.pop();
+        if (!snap) return;
+        onChange(snap.value);
+        setCursor(snap.cursor);
+        lastActionRef.current = undefined;
         return;
       }
 
@@ -331,6 +414,9 @@ export function Composer(props: ComposerProps) {
         if (isAtTop(c)) {
           // history
           if (history.length === 0) return;
+          if (historyIdx < 0) {
+            historyDraftRef.current = valueRef.current;
+          }
           const next = Math.min(history.length - 1, historyIdx + 1);
           setHistoryIdx(next);
           const item = history[history.length - 1 - next] ?? '';
@@ -340,6 +426,7 @@ export function Composer(props: ComposerProps) {
             line: itemLines.length - 1,
             col: (itemLines[itemLines.length - 1] ?? '').length,
           });
+          lastActionRef.current = undefined;
           onArrowUpAtTop?.();
         } else {
           const targetLine = c.line - 1;
@@ -359,13 +446,16 @@ export function Composer(props: ComposerProps) {
           const next = historyIdx - 1;
           setHistoryIdx(next);
           const item =
-            next < 0 ? '' : (history[history.length - 1 - next] ?? '');
+            next < 0
+              ? historyDraftRef.current
+              : (history[history.length - 1 - next] ?? '');
           onChange(item);
           const itemLines = splitLines(item);
           setCursor({
             line: itemLines.length - 1,
             col: (itemLines[itemLines.length - 1] ?? '').length,
           });
+          lastActionRef.current = undefined;
         } else {
           const targetLine = c.line + 1;
           moveTo({
@@ -383,6 +473,7 @@ export function Composer(props: ComposerProps) {
           const code = input.charCodeAt(0);
           if (code < 0x20 || code === 0x7f) return;
         }
+        lastActionRef.current = 'edit';
         insertText(input);
       }
     },
