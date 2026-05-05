@@ -10,6 +10,7 @@ import {
 import { resolveConfig } from '@/core/config';
 import { listSessions } from '@/core/session-store';
 import { ChatApp } from '@/ui/chat-app';
+import { VERSION } from '@/version';
 
 const chatCommand = defineCommand({
   meta: {
@@ -153,6 +154,7 @@ const sessionsCommand = defineCommand({
 const main = defineCommand({
   meta: {
     name: 'juno',
+    version: VERSION,
     description: 'Juno, a Codex-first local coding agent.',
   },
   subCommands: {

@@ -70,7 +70,7 @@ The `bin` entry in `package.json` maps `juno` to `src/cli/index.tsx`, so `bun li
 
 ## CLI
 
-All subcommands are implemented in [src/cli/index.tsx](src/cli/index.tsx).
+All subcommands are implemented in [src/cli/index.tsx](src/cli/index.tsx). `juno --help` prints the top-level usage; `juno --version` prints the version (the `package.json` value in source/local builds, the release tag in published binaries via a `--define` injection in [`.github/workflows/release.yml`](.github/workflows/release.yml)).
 
 ### `juno chat [prompt]`
 
@@ -239,7 +239,7 @@ bun test
 
 ## Cutting a release
 
-Releases are tag-driven. Pushing a tag matching `v*` triggers [`.github/workflows/release.yml`](.github/workflows/release.yml), which cross-compiles four binaries from a single Linux runner using `bun build --compile --target=...` (`darwin-x64`, `darwin-arm64`, `linux-x64`, `linux-arm64`), packages each as `juno-<version>-<os>-<arch>.tar.gz` (with the inner binary named plain `juno`), generates a `checksums.txt`, smoke-tests the Linux x64 build with `--help`, and uploads everything to the GitHub release.
+Releases are tag-driven. Pushing a tag matching `v*` triggers [`.github/workflows/release.yml`](.github/workflows/release.yml), which cross-compiles four binaries from a single Linux runner using `bun build --compile --target=...` (`darwin-x64`, `darwin-arm64`, `linux-x64`, `linux-arm64`), packages each as `juno-<version>-<os>-<arch>.tar.gz` (with the inner binary named plain `juno`), generates a `checksums.txt`, smoke-tests the Linux x64 build with `--help` and asserts `--version` matches the tag, and uploads everything to the GitHub release.
 
 To cut a release:
 

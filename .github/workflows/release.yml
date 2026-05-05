@@ -49,6 +49,7 @@ jobs:
             bun build ./src/cli/index.tsx \
               --compile \
               --target="bun-${os}-${arch}" \
+              --define "__JUNO_VERSION__=\"${VERSION}\"" \
               --outfile "${stage}/juno"
             tar -czf "dist/juno-${VERSION}-${os}-${arch}.tar.gz" -C "$stage" juno
           done
@@ -56,6 +57,15 @@ jobs:
 
       - name: Smoke test (linux x64 binary)
         run: ./build/linux-x64/juno --help
+
+      - name: Smoke test (linux x64 --version)
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          out=$(./build/linux-x64/juno --version)
+          echo "got: $out"
+          [ "$out" = "$VERSION" ] || { echo "version mismatch: got '$out', want '$VERSION'"; exit 1; }
 
       - name: Generate checksums
         run: |
