@@ -136,6 +136,23 @@ export type ModelFallback = {
   source: 'fresh' | 'cache' | 'static';
 };
 
+export type AuthStatus = {
+  authMode: AuthMode;
+  provider: 'codex' | 'none';
+  source: 'env' | 'stored' | 'none';
+  authFile: string;
+  credentialType?: 'api-key' | 'oauth';
+  accountIdPresent: boolean;
+  accountIdPartial?: string;
+  expiresAt?: string;
+  expiresInSeconds?: number;
+  refreshDueSoon?: boolean;
+  configuredModel: string;
+  activeModel: string;
+  modelFallback?: ModelFallback;
+  hint?: string;
+};
+
 export type SessionSummary = {
   id: string;
   path: string;

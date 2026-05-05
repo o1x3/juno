@@ -1,6 +1,8 @@
 import { createApiKeyCredential, extractAccountIdFromJwt } from '@/auth/codex';
 import {
+  DEFAULT_REFRESH_SKEW_MS,
   loadCredential,
+  type RefreshOptions,
   refreshCredentialIfNearExpiry,
   resolveCredential,
 } from '@/auth/storage';
@@ -24,6 +26,7 @@ import type {
   AgentConfig,
   AgentTurnResult,
   AuthMode,
+  AuthStatus,
   ModelClient,
   ModelFallback,
 } from '@/types';
@@ -49,11 +52,18 @@ type RoutingResolution = {
   modelFallback?: ModelFallback;
 };
 
-async function resolveRouting(config: AgentConfig): Promise<RoutingResolution> {
+async function resolveRouting(
+  config: AgentConfig,
+  refreshOptions?: RefreshOptions,
+): Promise<RoutingResolution> {
   const stored = await loadCredential(config.authFile);
   let refreshed: typeof stored;
   try {
-    refreshed = await refreshCredentialIfNearExpiry(config.authFile, stored);
+    refreshed = await refreshCredentialIfNearExpiry(
+      config.authFile,
+      stored,
+      refreshOptions,
+    );
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     throw new Error(
@@ -189,13 +199,16 @@ export async function startOrResumeChat(
   };
 }
 
-export async function resolveAuthSummary(config: AgentConfig): Promise<{
+export async function resolveAuthSummary(
+  config: AgentConfig,
+  refreshOptions?: RefreshOptions,
+): Promise<{
   authMode: AuthMode;
   activeModel: string;
   modelFallback?: ModelFallback;
 }> {
   try {
-    const routing = await resolveRouting(config);
+    const routing = await resolveRouting(config, refreshOptions);
     return {
       authMode: routing.authMode,
       activeModel: routing.activeModel,
@@ -204,6 +217,79 @@ export async function resolveAuthSummary(config: AgentConfig): Promise<{
   } catch {
     return { authMode: 'none', activeModel: config.model };
   }
+}
+
+function partialAccountId(accountId: string): string {
+  const trimmed = accountId.trim();
+  if (trimmed.length <= 4) {
+    return `…${trimmed}`;
+  }
+  return `…${trimmed.slice(-4)}`;
+}
+
+export async function resolveAuthStatus(
+  config: AgentConfig,
+  refreshOptions?: RefreshOptions,
+): Promise<AuthStatus> {
+  // resolveAuthSummary -> resolveRouting -> refreshCredentialIfNearExpiry
+  // can refresh and persist a new credential when the token is within the
+  // skew window. Run it first, THEN load the credential, so account-id /
+  // expiresAt / refreshDueSoon reflect the post-refresh state on disk
+  // rather than the stale snapshot we read going in.
+  const summary = await resolveAuthSummary(config, refreshOptions);
+  const stored = await loadCredential(config.authFile);
+
+  let source: AuthStatus['source'];
+  if (config.apiKey) {
+    source = 'env';
+  } else if (stored) {
+    source = 'stored';
+  } else {
+    source = 'none';
+  }
+
+  const credentialType = config.apiKey ? ('api-key' as const) : stored?.type;
+
+  let accountId: string | undefined;
+  if (stored?.type === 'oauth') {
+    accountId = stored.accountId ?? extractAccountIdFromJwt(stored.accessToken);
+  }
+
+  let expiresAt: string | undefined;
+  let expiresInSeconds: number | undefined;
+  let refreshDueSoon: boolean | undefined;
+  if (stored?.type === 'oauth' && stored.expiresAt) {
+    expiresAt = stored.expiresAt;
+    const expiresAtMs = Date.parse(stored.expiresAt);
+    if (!Number.isNaN(expiresAtMs)) {
+      expiresInSeconds = Math.round((expiresAtMs - Date.now()) / 1000);
+      refreshDueSoon = expiresAtMs - Date.now() <= DEFAULT_REFRESH_SKEW_MS;
+    }
+  }
+
+  const provider: AuthStatus['provider'] = source === 'none' ? 'none' : 'codex';
+
+  const status: AuthStatus = {
+    authMode: summary.authMode,
+    provider,
+    source,
+    authFile: config.authFile,
+    credentialType,
+    accountIdPresent: Boolean(accountId),
+    accountIdPartial: accountId ? partialAccountId(accountId) : undefined,
+    expiresAt,
+    expiresInSeconds,
+    refreshDueSoon,
+    configuredModel: config.model,
+    activeModel: summary.activeModel,
+    modelFallback: summary.modelFallback,
+  };
+
+  if (summary.authMode === 'none') {
+    status.hint = 'Run `juno login` or set OPENAI_API_KEY.';
+  }
+
+  return status;
 }
 
 export function normalizeApiKey(value: string): string {

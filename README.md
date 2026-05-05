@@ -9,7 +9,7 @@ This README only documents behavior that is implemented and verified in this rep
 Local MVP. Usable, not feature-complete.
 
 What works today:
-- Bun + TypeScript CLI with five subcommands (`chat`, `login`, `logout`, `resume`, `sessions`)
+- Bun + TypeScript CLI with six subcommands (`chat`, `login`, `logout`, `resume`, `sessions`, `auth status`)
 - Ink-based chat UI with streaming assistant text and inline tool activity
 - Manual agent loop on top of `streamText` (`@ai-sdk/openai`)
 - Built-in tools: `Read`, `Write`, `Edit`, `Bash`, `Grep`
@@ -113,6 +113,26 @@ Removes the auth file (`${JUNO_HOME}/auth.json`). No confirmation prompt.
 ### `juno resume <session-id>`
 
 Opens the Ink UI with an existing session. The session id is the file name (without `.jsonl`) under the sessions directory — use `juno sessions` to list them.
+
+### `juno auth status`
+
+Prints a concise, user-facing snapshot of the current auth and routing state. It runs the same routing path the chat code uses, which means: if the stored OAuth token is within the 5-minute refresh window, the command will hit `https://auth.openai.com/oauth/token` to refresh it and rewrite `auth.json` in place — exactly the side effect `juno chat` would produce on its next turn. Outside that window it does not write to disk. The printed status always reflects the credential as it stands after any refresh that happened during the call, never the pre-refresh snapshot.
+
+Fields:
+- `auth` — `none` | `api-key` | `oauth-api-key` | `oauth-codex`.
+- `provider` — `codex` (or `none` when no credential is available).
+- `source` — `env (OPENAI_API_KEY)` if the env var resolves over storage, `stored (<authFile>)` if a credential was loaded from disk.
+- `account` — `present (…<last4>)` for OAuth credentials. Only the last four characters of the ChatGPT account id are shown; the full id is never printed.
+- `expires` — for OAuth credentials, the raw `expiresAt` ISO timestamp plus a relative window (`in 58m`, `expired 3m ago`) and a `refresh-due-soon: yes|no` flag that tracks the same 5-minute window the runtime uses for auto-refresh.
+- `model` — the model that would be sent to the backend on the next turn.
+- `fallback` — only present when the configured model was rewritten (e.g. ChatGPT-account routing forced a safe-allowlist model).
+
+When no credential is available the output collapses to:
+
+```
+auth: none
+hint: Run `juno login` or set OPENAI_API_KEY.
+```
 
 ### `juno sessions`
 
