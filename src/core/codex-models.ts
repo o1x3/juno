@@ -39,10 +39,13 @@ export const CHATGPT_ACCOUNT_SAFE_MODELS: ReadonlySet<string> = new Set([
   'gpt-5.2',
 ]);
 
+// Strict allowlist check. The original draft of this had a `gpt-X.Y > 5.4`
+// future-proof regex (lifted from opencode), but that is the same shape of bug
+// we are fixing here — auto-routing a slug that has not actually been
+// confirmed against the ChatGPT-account backend. When upstream ships a new
+// model, refresh CHATGPT_ACCOUNT_SAFE_MODELS deliberately.
 export function isChatGptAccountSafeModel(id: string): boolean {
-  if (CHATGPT_ACCOUNT_SAFE_MODELS.has(id)) return true;
-  const match = id.match(/^gpt-(\d+\.\d+)/);
-  return match ? Number.parseFloat(match[1] ?? '0') > 5.4 : false;
+  return CHATGPT_ACCOUNT_SAFE_MODELS.has(id);
 }
 
 const STATIC_FALLBACK: CodexModel[] = [

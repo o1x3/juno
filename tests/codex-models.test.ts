@@ -233,9 +233,12 @@ describe('isChatGptAccountSafeModel', () => {
     expect(isChatGptAccountSafeModel('gpt-5.1-codex-mini')).toBe(false);
   });
 
-  test('accepts future gpt-X.Y slugs where X.Y > 5.4', () => {
-    expect(isChatGptAccountSafeModel('gpt-5.6')).toBe(true);
-    expect(isChatGptAccountSafeModel('gpt-6.0-codex')).toBe(true);
+  test('rejects unknown future slugs even if they look like a higher version', () => {
+    // Strict allowlist: do not auto-route a slug just because the version
+    // string parses high. Refresh the allowlist deliberately when upstream
+    // ships new models.
+    expect(isChatGptAccountSafeModel('gpt-5.6')).toBe(false);
+    expect(isChatGptAccountSafeModel('gpt-6.0-codex')).toBe(false);
   });
 });
 

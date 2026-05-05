@@ -277,7 +277,7 @@ Long multi-turn sessions and resume-after-tool-heavy sessions are not yet verifi
 The tool shells out to `rg`. Make sure ripgrep is installed and on `PATH`.
 
 **`Codex backend error 400: ... not supported when using Codex with a ChatGPT account.`**
-The ChatGPT-account Codex backend rejects some model slugs (e.g. `gpt-5.1-codex-mini`). For OAuth-only credentials, Juno auto-selects from a known-safe set: `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.3-codex`, `gpt-5.3-codex-spark`, `gpt-5.2`. If you've pinned a slug via `JUNO_CODEX_MODEL`, that override is honored verbatim — unset it to let Juno pick a safe default, or set it to one of the slugs above.
+The ChatGPT-account Codex backend rejects some model slugs (e.g. `gpt-5.1-codex-mini`). For OAuth-only credentials, Juno auto-selects from a strict known-safe allowlist: `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.3-codex`, `gpt-5.3-codex-spark`, `gpt-5.2`. If you've pinned a slug via `JUNO_CODEX_MODEL`, that override is honored verbatim — unset it to let Juno pick a safe default, or set it to one of the slugs above. New upstream models are not auto-trusted; the allowlist is refreshed deliberately.
 
 ## Pointers
 
