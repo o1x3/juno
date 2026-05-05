@@ -32,9 +32,19 @@ describe('juno --version', () => {
       stderr: 'pipe',
     });
 
+    // citty prints --version through consola, which uses a "basic" reporter
+    // when stdout is not a TTY (CI). The basic reporter prefixes log lines
+    // with `[log] `, while the fancy reporter (local TTY) does not. Strip
+    // the prefix so the test passes in both environments without coupling
+    // to consola's reporter selection.
+    const stdout = cli.stdout
+      .toString()
+      .trim()
+      .replace(/^\[log\]\s*/, '');
+
     expect({
       exit: cli.exitCode,
-      stdout: cli.stdout.toString().trim(),
+      stdout,
       stderr: cli.stderr.toString().trim(),
     }).toEqual({
       exit: 0,
