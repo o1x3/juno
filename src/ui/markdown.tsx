@@ -91,7 +91,7 @@ function renderInline(
         const t = token as Tokens.Codespan;
         out.push(
           <Text key={k} color="yellowBright">
-            {`\`${t.text}\``}
+            {t.text}
           </Text>,
         );
         break;
@@ -389,8 +389,23 @@ function renderTokens(tokens: Token[], ctx: RenderCtx): ReactNode[] {
       case 'hr':
         out.push(renderHr(ctx.width, k));
         return;
+      case 'text': {
+        const t = token as Tokens.Text;
+        if (t.tokens && t.tokens.length > 0) {
+          out.push(
+            <Box key={k} flexDirection="row">
+              <Text>{renderInline(t.tokens, ctx, k)}</Text>
+            </Box>,
+          );
+        } else {
+          const wrapped = softWrap(t.text, ctx.width);
+          wrapped.forEach((line, j) => {
+            out.push(<Text key={`${k}-${j}`}>{line}</Text>);
+          });
+        }
+        return;
+      }
       case 'html': {
-        // Render raw HTML as dim text. We don't try to parse it.
         const t = token as Tokens.HTML;
         out.push(
           <Text key={k} color={colors.dim} dimColor>
@@ -400,7 +415,6 @@ function renderTokens(tokens: Token[], ctx: RenderCtx): ReactNode[] {
         return;
       }
       default: {
-        // Fallback: print raw text if available.
         const t = token as Tokens.Generic;
         if ('text' in t && typeof t.text === 'string') {
           const wrapped = softWrap(t.text, ctx.width);
