@@ -263,7 +263,7 @@ function renderList(
           width: Math.max(10, ctx.width - markerWidth - 2),
           indent: ctx.indent + 1,
         };
-        const checkbox = item.task != null ? (item.checked ? '☑ ' : '☐ ') : '';
+        const checkbox = item.task ? (item.checked ? '☑ ' : '☐ ') : '';
         const inner = renderTokens(item.tokens, itemCtx);
         return (
           <Box key={i} flexDirection="row">
