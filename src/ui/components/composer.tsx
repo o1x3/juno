@@ -57,7 +57,7 @@ function modePrefix(mode: ComposerVisualMode): {
     case 'palette':
       return { glyph: '/', color: colors.accent };
     default:
-      return { glyph: '▌', color: colors.accent };
+      return { glyph: '›', color: colors.accent };
   }
 }
 
@@ -565,12 +565,8 @@ export function Composer(props: ComposerProps) {
   }
 
   return (
-    <Box
-      flexDirection="column"
-      borderStyle="round"
-      borderColor={prefix.color}
-      paddingX={1}
-    >
+    <Box flexDirection="column">
+      <Text dimColor>{'─'.repeat(width)}</Text>
       {renderedLines.map((line, idx) => (
         <Box key={idx} flexDirection="row">
           {idx === 0 ? (

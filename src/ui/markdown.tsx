@@ -200,17 +200,16 @@ function renderHeading(
 
 function renderCodeBlock(
   token: Tokens.Code,
-  width: number,
+  _width: number,
   key: string,
 ): ReactNode {
-  const lang = (token.lang ?? '').trim() || 'code';
-  const ruleWidth = Math.max(20, Math.min(width - 4, 80));
-  const rule = '┄'.repeat(ruleWidth);
+  const lang = (token.lang ?? '').trim();
+  const fence = lang ? `\`\`\`${lang}` : '```';
   const lines = token.text.split('\n');
   return (
     <Box key={key} flexDirection="column" marginLeft={2} marginY={0}>
       <Text color={colors.dim} dimColor>
-        {`┄ ${lang} ${rule}`}
+        {fence}
       </Text>
       {lines.map((line, i) => (
         <Text key={i} color="cyanBright">
@@ -218,7 +217,7 @@ function renderCodeBlock(
         </Text>
       ))}
       <Text color={colors.dim} dimColor>
-        {rule}
+        {'```'}
       </Text>
     </Box>
   );
@@ -264,20 +263,17 @@ function renderList(
           width: Math.max(10, ctx.width - markerWidth - 2),
           indent: ctx.indent + 1,
         };
-        const checkbox =
-          item.task != null ? (item.checked ? '[x] ' : '[ ] ') : '';
+        const checkbox = item.task != null ? (item.checked ? '☑ ' : '☐ ') : '';
         const inner = renderTokens(item.tokens, itemCtx);
         return (
           <Box key={i} flexDirection="row">
             <Text color={colors.accent}>{`${marker} `}</Text>
-            <Box flexDirection="column">
-              {checkbox && (
-                <Text color={item.checked ? colors.exec : colors.dim}>
-                  {checkbox}
-                </Text>
-              )}
-              {inner}
-            </Box>
+            {checkbox && (
+              <Text color={item.checked ? colors.exec : colors.dim}>
+                {checkbox}
+              </Text>
+            )}
+            <Box flexDirection="column">{inner}</Box>
           </Box>
         );
       })}

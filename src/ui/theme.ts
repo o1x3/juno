@@ -29,8 +29,8 @@ export const colors = {
 };
 
 export const glyphs = {
-  user: '▌',
-  assistant: '✦',
+  user: '›',
+  assistant: '·',
   tool: '⏵',
   plan: '◆',
   bash: '$',
