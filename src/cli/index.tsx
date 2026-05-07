@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { defineCommand, runCommand, runMain } from 'citty';
 import { render } from 'ink';
+import type React from 'react';
 import { loginWithBrowser, loginWithDeviceCode } from '@/auth/codex';
 import { clearCredential, saveCredential } from '@/auth/storage';
 import {
@@ -13,6 +14,21 @@ import { listSessions } from '@/core/session-store';
 import type { AuthStatus } from '@/types';
 import { ChatApp } from '@/ui/chat-app';
 import { VERSION } from '@/version';
+
+async function renderFullscreen(node: React.ReactElement): Promise<void> {
+  process.stdout.write('\x1b[?1049h'); // enter alternate screen
+  let restored = false;
+  const restore = () => {
+    if (restored) return;
+    restored = true;
+    process.stdout.write('\x1b[?1049l'); // exit alternate screen
+  };
+  process.on('exit', restore);
+  const instance = render(node);
+  await instance.waitUntilExit();
+  restore();
+  process.off('exit', restore);
+}
 
 function formatExpiresIn(seconds: number): string {
   const abs = Math.abs(seconds);
@@ -112,7 +128,7 @@ const chatCommand = defineCommand({
       return;
     }
 
-    render(<ChatApp config={config} />);
+    await renderFullscreen(<ChatApp config={config} />);
   },
 });
 
@@ -198,7 +214,9 @@ const resumeCommand = defineCommand({
   },
   async run({ args }) {
     const config = resolveConfig();
-    render(<ChatApp config={config} sessionId={String(args.sessionId)} />);
+    await renderFullscreen(
+      <ChatApp config={config} sessionId={String(args.sessionId)} />,
+    );
   },
 });
 
