@@ -105,7 +105,7 @@ export function Composer(props: ComposerProps) {
   const historyDraftRef = useRef<string>('');
 
   const lines = useMemo(() => splitLines(value), [value]);
-  const innerWidth = Math.max(10, width - 4); // leave room for border + glyph
+  const innerWidth = Math.max(10, width - 2); // leave room for glyph prefix
 
   // Keep cursor inside bounds whenever value changes (e.g. external set).
   useEffect(() => {

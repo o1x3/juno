@@ -676,7 +676,9 @@ export function ChatApp({
   // Layout math
   const showPane = paneVisible && termWidth >= 100;
   const chatWidth = showPane ? termWidth - STATUS_PANE_WIDTH - 2 : termWidth;
-  const chatHeight = Math.max(8, termHeight - 8);
+  // header(1) + separator(1) + composer(1+) + status(1) + hint(1) = 5 fixed rows
+  // leave 2 slack for multiline composer expansion
+  const chatHeight = Math.max(8, termHeight - 7);
 
   const breakdown = approximateBreakdown(cells);
   const ctxLimit = approximateContextLimit(activeModel);
