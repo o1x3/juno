@@ -21,6 +21,7 @@ import { STATUS_PANE_WIDTH, StatusPane } from '@/ui/components/status-pane';
 import { Transcript } from '@/ui/components/transcript';
 import { clampScroll, truncatePath } from '@/ui/format';
 import { matchKeybind } from '@/ui/keybinds';
+import { computeChatHeight } from '@/ui/layout';
 import { colors, glyphs, modeAccent } from '@/ui/theme';
 
 type ChatAppProps = {
@@ -676,9 +677,9 @@ export function ChatApp({
   // Layout math
   const showPane = paneVisible && termWidth >= 100;
   const chatWidth = showPane ? termWidth - STATUS_PANE_WIDTH - 2 : termWidth;
-  // header(1) + separator(1) + composer(1+) + status(1) + hint(1) = 5 fixed rows
-  // leave 2 slack for multiline composer expansion
-  const chatHeight = Math.max(8, termHeight - 7);
+  // header(1) + separator(1) + composer(1+) + spacer(1) + status(1) + hint(1)
+  // = 6 fixed rows; leave 2 slack for multiline composer expansion.
+  const chatHeight = computeChatHeight(termHeight);
 
   const breakdown = approximateBreakdown(cells);
   const ctxLimit = approximateContextLimit(activeModel);
@@ -805,6 +806,10 @@ export function ChatApp({
           if (selected) setComposerValue(`/${selected.name} `);
         }}
       />
+
+      <Box height={1}>
+        <Text> </Text>
+      </Box>
 
       <Box paddingX={1}>
         <StatusLine
