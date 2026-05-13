@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 
+import { filterToolsForMode } from '@/core/chat-service';
 import { buildSystemPrompt } from '@/core/prompt';
+import { createBuiltinTools } from '@/core/tools';
 import type { ProjectInstructionSet } from '@/types';
 
 const empty: ProjectInstructionSet = {
@@ -28,5 +30,33 @@ describe('buildSystemPrompt', () => {
   test('default is exec mode', () => {
     const out = buildSystemPrompt(empty);
     expect(out).not.toContain('PLAN MODE');
+  });
+});
+
+describe('filterToolsForMode', () => {
+  const tools = createBuiltinTools({
+    cwd: '/tmp',
+    outputLimit: 100,
+    readLineLimit: 50,
+    bashTimeoutMs: 1000,
+    sessionsDir: '/tmp',
+    sessionId: 'x',
+  });
+
+  test('plan mode keeps TodoWrite alongside Read and Grep', () => {
+    const names = filterToolsForMode(tools, 'plan').map((t) => t.name);
+    expect(names).toContain('Read');
+    expect(names).toContain('Grep');
+    expect(names).toContain('TodoWrite');
+    expect(names).not.toContain('Write');
+    expect(names).not.toContain('Edit');
+    expect(names).not.toContain('Bash');
+  });
+
+  test('exec mode keeps every builtin tool', () => {
+    const names = filterToolsForMode(tools, 'exec').map((t) => t.name);
+    expect(names).toContain('TodoWrite');
+    expect(names).toContain('Bash');
+    expect(names).toContain('Write');
   });
 });

@@ -137,6 +137,8 @@ export async function runAgentTurn(
           outputLimit: config.toolOutputLimit,
           readLineLimit: config.readLineLimit,
           bashTimeoutMs: config.bashTimeoutMs,
+          sessionsDir: config.sessionsDir,
+          sessionId,
         },
       );
       results.push(result);

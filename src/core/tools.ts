@@ -3,7 +3,14 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { z } from 'zod';
 
 import { ensureParent, resolveInside, truncateText } from '@/core/fs';
-import type { ToolContext, ToolResult, ToolSpec } from '@/types';
+import { appendSessionEvent } from '@/core/session-store';
+import type {
+  TodoItem,
+  TodoStatus,
+  ToolContext,
+  ToolResult,
+  ToolSpec,
+} from '@/types';
 
 export type ShellResult = {
   stdout: string;
@@ -213,6 +220,114 @@ export function createBuiltinTools(context: ToolContext): ToolSpec[] {
           return fail(
             toolCallId,
             'Bash',
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+      },
+    },
+    {
+      name: 'TodoWrite',
+      description:
+        'Replace the in-session plan. Pass the full list every call. Use for multi-step work; keep at most one item in_progress.',
+      inputSchema: z.object({
+        todos: z.array(
+          z.object({
+            id: z.string().min(1),
+            content: z.string().min(1),
+            status: z.enum(['pending', 'in_progress', 'completed']),
+            activeForm: z.string().optional(),
+          }),
+        ),
+      }),
+      execute: async (input, runtimeContext) => {
+        const toolCallId = String(input.toolCallId ?? crypto.randomUUID());
+        try {
+          const raw = input.todos;
+          if (!Array.isArray(raw)) {
+            return fail(toolCallId, 'TodoWrite', '`todos` must be an array');
+          }
+          const todos: TodoItem[] = [];
+          const seenIds = new Set<string>();
+          for (let i = 0; i < raw.length; i += 1) {
+            const item = raw[i] as Record<string, unknown> | undefined;
+            if (!item || typeof item !== 'object') {
+              return fail(
+                toolCallId,
+                'TodoWrite',
+                `todos[${i}] must be an object`,
+              );
+            }
+            const id = item.id;
+            const content = item.content;
+            const status = item.status;
+            if (typeof id !== 'string' || id.length === 0) {
+              return fail(
+                toolCallId,
+                'TodoWrite',
+                `todos[${i}].id must be a non-empty string`,
+              );
+            }
+            if (typeof content !== 'string' || content.length === 0) {
+              return fail(
+                toolCallId,
+                'TodoWrite',
+                `todos[${i}].content must be a non-empty string`,
+              );
+            }
+            if (
+              status !== 'pending' &&
+              status !== 'in_progress' &&
+              status !== 'completed'
+            ) {
+              return fail(
+                toolCallId,
+                'TodoWrite',
+                `todos[${i}].status must be pending|in_progress|completed`,
+              );
+            }
+            if (seenIds.has(id)) {
+              return fail(toolCallId, 'TodoWrite', `duplicate todo id: ${id}`);
+            }
+            seenIds.add(id);
+            const activeForm = item.activeForm;
+            if (activeForm !== undefined && typeof activeForm !== 'string') {
+              return fail(
+                toolCallId,
+                'TodoWrite',
+                `todos[${i}].activeForm must be a string when present`,
+              );
+            }
+            todos.push({
+              id,
+              content,
+              status: status as TodoStatus,
+              ...(activeForm !== undefined ? { activeForm } : {}),
+            });
+          }
+          const inProgress = todos.filter(
+            (t) => t.status === 'in_progress',
+          ).length;
+          if (inProgress > 1) {
+            return fail(
+              toolCallId,
+              'TodoWrite',
+              `at most one todo may be in_progress (got ${inProgress})`,
+            );
+          }
+          await appendSessionEvent(
+            runtimeContext.sessionsDir,
+            runtimeContext.sessionId,
+            {
+              type: 'todo_update',
+              timestamp: new Date().toISOString(),
+              todos,
+            },
+          );
+          return ok(toolCallId, 'TodoWrite', { todos });
+        } catch (error) {
+          return fail(
+            toolCallId,
+            'TodoWrite',
             error instanceof Error ? error.message : String(error),
           );
         }
