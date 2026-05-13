@@ -219,12 +219,16 @@ function DiffBlock({
   );
 }
 
-function summarizeArgs(input: Record<string, unknown>): string {
+function summarizeArgs(
+  input: Record<string, unknown>,
+  cap: number = 60,
+): string {
+  const limit = Math.max(20, cap);
   const keys = ['filePath', 'pattern', 'command'];
   for (const k of keys) {
     if (typeof input[k] === 'string' && (input[k] as string).length > 0) {
       const v = input[k] as string;
-      return v.length > 60 ? `${v.slice(0, 57)}…` : v;
+      return v.length > limit ? `${v.slice(0, limit - 3)}…` : v;
     }
   }
   return '';
@@ -241,46 +245,47 @@ export function ToolGroupCell({
     (acc, t) => acc + ((t.endedAt ?? Date.now()) - t.startedAt),
     0,
   );
-  const header = cell.complete
-    ? `▾ tools · ${cell.tools.length} call${cell.tools.length === 1 ? '' : 's'} · ${formatDuration(totalMs)}`
-    : `▾ tools · ${cell.tools.length} call${cell.tools.length === 1 ? '' : 's'} · ${formatDuration(totalMs)}`;
+  const rowWidth = Math.max(20, width - 2);
+  const callsLabel = `${cell.tools.length} call${cell.tools.length === 1 ? '' : 's'}`;
   if (cell.collapsed && cell.complete) {
     return (
-      <Box flexDirection="column" marginLeft={2} marginBottom={1}>
+      <Box flexDirection="column" marginLeft={2} marginTop={1} marginBottom={1}>
         <Text color={colors.tool} dimColor>
-          {`▸ tools · ${cell.tools.length} call${cell.tools.length === 1 ? '' : 's'} · ${formatDuration(totalMs)}   (⌃T expand)`}
+          {`▸ tools · ${callsLabel} · ${formatDuration(totalMs)}   (⌃T expand)`}
         </Text>
       </Box>
     );
   }
-  const spinner =
-    glyphs.spinnerFrames[cell.spinnerFrame % glyphs.spinnerFrames.length] ??
-    '⠋';
+  const argCap = Math.max(60, rowWidth - 18);
   return (
-    <Box flexDirection="column" marginLeft={2} marginBottom={1}>
-      <Text color={colors.tool}>{header}</Text>
+    <Box flexDirection="column" marginLeft={2} marginTop={1} marginBottom={1}>
+      <Box flexDirection="row" width={rowWidth}>
+        <Text color={colors.tool}>{`▾ tools · ${callsLabel}`}</Text>
+        <Box flexGrow={1} />
+        <Text color={colors.tool} dimColor>
+          {formatDuration(totalMs)}
+        </Text>
+      </Box>
       {cell.tools.map((entry, i) => {
         const elapsed = (entry.endedAt ?? Date.now()) - entry.startedAt;
-        const status = !entry.result
-          ? `${spinner}`
-          : entry.result.isError
-            ? '✗'
-            : '✓';
-        const statusColor: ThemeColor = !entry.result
+        const nameColor: ThemeColor = !entry.result
           ? colors.tool
           : entry.result.isError
             ? colors.error
             : colors.exec;
-        const args = summarizeArgs(entry.call.input);
+        const args = summarizeArgs(entry.call.input, argCap);
         const diffInfo = extractDiff(entry.result);
         return (
-          <Box key={i} flexDirection="column">
-            <Box flexDirection="row">
-              <Text color={statusColor}>{`  ${status}  `}</Text>
-              <Text color={colors.tool}>{entry.call.toolName.padEnd(6)}</Text>
-              <Text color="gray">{args}</Text>
+          <Box key={i} flexDirection="column" marginTop={1}>
+            <Box flexDirection="row" width={rowWidth}>
+              <Text color={nameColor}>{entry.call.toolName.padEnd(6)}</Text>
+              <Box flexGrow={1} flexShrink={1} overflowX="hidden">
+                <Text color="gray" wrap="truncate-end">
+                  {`   ${args}`}
+                </Text>
+              </Box>
               <Text color="gray" dimColor>
-                {`  ${formatDuration(elapsed)}`}
+                {formatDuration(elapsed)}
               </Text>
             </Box>
             {diffInfo && (
