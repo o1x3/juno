@@ -323,7 +323,9 @@ if fetch "$CHECKSUMS_URL" "$TMPDIR/checksums.txt" 2>/dev/null; then
         exit 1
     fi
     SHORT_SHA=$(printf "%s" "$ACTUAL" | cut -c1-12)
-    phase_end "sha256: $SHORT_SHA…"
+    # Brace the expansion: macOS /bin/sh greedily reads the UTF-8 ellipsis
+    # bytes as part of the variable name and then errors under `set -u`.
+    phase_end "sha256: ${SHORT_SHA}…"
 else
     phase_fail "checksums.txt unreachable"
     err "refusing to install without verifying integrity"
