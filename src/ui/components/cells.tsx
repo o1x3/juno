@@ -1,6 +1,10 @@
 import { Box, Text } from 'ink';
+import type { ReactElement } from 'react';
+
+import type { DiffHunk, DiffLine, DiffPayload } from '@/core/diff';
 import type { TodoItem, ToolCall, ToolResult } from '@/types';
-import { formatDuration, softWrap } from '@/ui/format';
+import { collapseHunkLines } from '@/ui/diff-render';
+import { formatDuration, softWrap, truncatePath } from '@/ui/format';
 import { renderMarkdown } from '@/ui/markdown';
 import { colors, glyphs, type ThemeColor } from '@/ui/theme';
 
@@ -107,6 +111,114 @@ export function AssistantCell({
   );
 }
 
+function extractDiff(result: ToolResult | undefined): {
+  diff: DiffPayload;
+  path: string;
+} | null {
+  if (!result || result.isError) return null;
+  if (result.toolName !== 'Edit' && result.toolName !== 'Write') return null;
+  const output = result.output;
+  if (!output || typeof output !== 'object') return null;
+  const diff = (output as { diff?: unknown }).diff;
+  const path = (output as { path?: unknown }).path;
+  if (!diff || typeof diff !== 'object' || typeof path !== 'string') {
+    return null;
+  }
+  if (!Array.isArray((diff as { hunks?: unknown }).hunks)) return null;
+  return { diff: diff as DiffPayload, path };
+}
+
+function renderDiffLine(
+  line: DiffLine,
+  width: number,
+  keyPrefix: string,
+): ReactElement[] {
+  const prefix = line.kind === 'add' ? '+ ' : line.kind === 'del' ? '- ' : '  ';
+  const color: ThemeColor =
+    line.kind === 'add'
+      ? colors.exec
+      : line.kind === 'del'
+        ? colors.error
+        : colors.dim;
+  const segments = softWrap(`${prefix}${line.text}`, Math.max(20, width - 4));
+  return segments.map((segment, idx) => (
+    <Text
+      key={`${keyPrefix}-${idx}`}
+      color={color}
+      dimColor={line.kind === 'ctx'}
+    >
+      {segment}
+    </Text>
+  ));
+}
+
+function renderDiffHunk(
+  hunk: DiffHunk,
+  width: number,
+  keyPrefix: string,
+): ReactElement {
+  if (hunk.kind === 'truncated') {
+    return (
+      <Box key={keyPrefix} flexDirection="column">
+        <Text color={colors.error} dimColor>
+          {`… diff truncated: ${hunk.oldBytes}B → ${hunk.newBytes}B exceeds the 50KB cap`}
+        </Text>
+      </Box>
+    );
+  }
+  const header = `@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`;
+  const collapsed = collapseHunkLines(hunk.lines);
+  return (
+    <Box key={keyPrefix} flexDirection="column">
+      <Text color={colors.dim} dimColor>
+        {header}
+      </Text>
+      {collapsed.collapsed
+        ? [
+            ...collapsed.head.flatMap((line, i) =>
+              renderDiffLine(line, width, `${keyPrefix}-h-${i}`),
+            ),
+            <Text key={`${keyPrefix}-hidden`} color={colors.dim} dimColor>
+              {`  … ${collapsed.hiddenCount} lines hidden`}
+            </Text>,
+            ...collapsed.tail.flatMap((line, i) =>
+              renderDiffLine(line, width, `${keyPrefix}-t-${i}`),
+            ),
+          ]
+        : collapsed.lines.flatMap((line, i) =>
+            renderDiffLine(line, width, `${keyPrefix}-l-${i}`),
+          )}
+    </Box>
+  );
+}
+
+function DiffBlock({
+  payload,
+  path,
+  width,
+  keyPrefix,
+}: {
+  payload: DiffPayload;
+  path: string;
+  width: number;
+  keyPrefix: string;
+}) {
+  if (payload.identical || payload.hunks.length === 0) return null;
+  const headerLabel = payload.created
+    ? `${truncatePath(path, Math.max(20, width - 16))}  (new file)`
+    : truncatePath(path, Math.max(20, width - 4));
+  return (
+    <Box flexDirection="column" marginLeft={6}>
+      <Text color={colors.dim} dimColor>
+        {headerLabel}
+      </Text>
+      {payload.hunks.map((hunk, i) =>
+        renderDiffHunk(hunk, width - 6, `${keyPrefix}-${i}`),
+      )}
+    </Box>
+  );
+}
+
 function summarizeArgs(input: Record<string, unknown>): string {
   const keys = ['filePath', 'pattern', 'command'];
   for (const k of keys) {
@@ -120,8 +232,10 @@ function summarizeArgs(input: Record<string, unknown>): string {
 
 export function ToolGroupCell({
   cell,
+  width,
 }: {
   cell: Extract<TranscriptCell, { kind: 'tool-group' }>;
+  width: number;
 }) {
   const totalMs = cell.tools.reduce(
     (acc, t) => acc + ((t.endedAt ?? Date.now()) - t.startedAt),
@@ -158,14 +272,25 @@ export function ToolGroupCell({
             ? colors.error
             : colors.exec;
         const args = summarizeArgs(entry.call.input);
+        const diffInfo = extractDiff(entry.result);
         return (
-          <Box key={i} flexDirection="row">
-            <Text color={statusColor}>{`  ${status}  `}</Text>
-            <Text color={colors.tool}>{entry.call.toolName.padEnd(6)}</Text>
-            <Text color="gray">{args}</Text>
-            <Text color="gray" dimColor>
-              {`  ${formatDuration(elapsed)}`}
-            </Text>
+          <Box key={i} flexDirection="column">
+            <Box flexDirection="row">
+              <Text color={statusColor}>{`  ${status}  `}</Text>
+              <Text color={colors.tool}>{entry.call.toolName.padEnd(6)}</Text>
+              <Text color="gray">{args}</Text>
+              <Text color="gray" dimColor>
+                {`  ${formatDuration(elapsed)}`}
+              </Text>
+            </Box>
+            {diffInfo && (
+              <DiffBlock
+                payload={diffInfo.diff}
+                path={diffInfo.path}
+                width={width}
+                keyPrefix={`diff-${i}`}
+              />
+            )}
           </Box>
         );
       })}
@@ -345,7 +470,7 @@ export function renderCell(cell: TranscriptCell, width: number) {
     case 'assistant':
       return <AssistantCell cell={cell} width={width} />;
     case 'tool-group':
-      return <ToolGroupCell cell={cell} />;
+      return <ToolGroupCell cell={cell} width={width} />;
     case 'bash-direct':
       return <BashDirectCell cell={cell} width={width} />;
     case 'error':

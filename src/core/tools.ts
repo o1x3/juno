@@ -2,6 +2,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 
 import { z } from 'zod';
 
+import { computeLineDiff } from '@/core/diff';
 import { ensureParent, resolveInside, truncateText } from '@/core/fs';
 import { appendSessionEvent } from '@/core/session-store';
 import type {
@@ -144,10 +145,29 @@ export function createBuiltinTools(context: ToolContext): ToolSpec[] {
         try {
           const path = resolveInside(context.cwd, String(input.filePath));
           await ensureParent(path);
-          await writeFile(path, String(input.content), 'utf8');
+          const nextContent = String(input.content);
+          let oldContent = '';
+          let created = false;
+          try {
+            oldContent = await readFile(path, 'utf8');
+          } catch (readError) {
+            if (
+              readError instanceof Error &&
+              (readError as NodeJS.ErrnoException).code === 'ENOENT'
+            ) {
+              created = true;
+            } else {
+              throw readError;
+            }
+          }
+          await writeFile(path, nextContent, 'utf8');
+          const diff = computeLineDiff(oldContent, nextContent);
+          if (created) diff.created = true;
           return ok(toolCallId, 'Write', {
             path,
-            bytes: String(input.content).length,
+            bytes: nextContent.length,
+            created,
+            diff,
           });
         } catch (error) {
           return fail(
@@ -186,7 +206,8 @@ export function createBuiltinTools(context: ToolContext): ToolSpec[] {
           }
           const next = content.replace(oldString, String(input.newString));
           await writeFile(path, next, 'utf8');
-          return ok(toolCallId, 'Edit', { path, replaced: true });
+          const diff = computeLineDiff(content, next);
+          return ok(toolCallId, 'Edit', { path, replaced: true, diff });
         } catch (error) {
           return fail(
             toolCallId,
