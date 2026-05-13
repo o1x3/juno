@@ -246,21 +246,53 @@ export function ToolGroupCell({
     0,
   );
   const rowWidth = Math.max(20, width - 2);
-  const callsLabel = `${cell.tools.length} call${cell.tools.length === 1 ? '' : 's'}`;
-  if (cell.collapsed && cell.complete) {
+  const toolsLabel = `${cell.tools.length} tool${cell.tools.length === 1 ? '' : 's'}`;
+  const argCap = Math.max(60, rowWidth - 18);
+
+  if (!cell.complete) {
+    const total = cell.tools.length;
+    const activeIdx = cell.tools.findIndex((t) => !t.result);
+    const idx = activeIdx === -1 ? Math.max(0, total - 1) : activeIdx;
+    const active = cell.tools[idx];
+    const spinner =
+      glyphs.spinnerFrames[cell.spinnerFrame % glyphs.spinnerFrames.length] ??
+      '⠋';
+    const elapsed = active ? Date.now() - active.startedAt : 0;
+    const progress = total > 1 ? `[${idx + 1}/${total}] ` : '';
+    const toolName = active?.call.toolName.padEnd(6) ?? '';
+    const args = active ? summarizeArgs(active.call.input, argCap) : '';
+    return (
+      <Box flexDirection="column" marginLeft={2} marginTop={1} marginBottom={1}>
+        <Box flexDirection="row" width={rowWidth}>
+          <Text color={colors.tool}>{`${spinner}  ${progress}`}</Text>
+          <Text color={colors.tool}>{toolName}</Text>
+          <Box flexGrow={1} flexShrink={1} overflowX="hidden">
+            <Text color="gray" wrap="truncate-end">
+              {`   ${args}`}
+            </Text>
+          </Box>
+          <Text color="gray" dimColor>
+            {formatDuration(elapsed)}
+          </Text>
+        </Box>
+      </Box>
+    );
+  }
+
+  if (cell.collapsed) {
     return (
       <Box flexDirection="column" marginLeft={2} marginTop={1} marginBottom={1}>
         <Text color={colors.tool} dimColor>
-          {`▸ tools · ${callsLabel} · ${formatDuration(totalMs)}   (⌃T expand)`}
+          {`▸ ran ${toolsLabel} · ${formatDuration(totalMs)}   (⌃T expand)`}
         </Text>
       </Box>
     );
   }
-  const argCap = Math.max(60, rowWidth - 18);
+
   return (
     <Box flexDirection="column" marginLeft={2} marginTop={1} marginBottom={1}>
       <Box flexDirection="row" width={rowWidth}>
-        <Text color={colors.tool}>{`▾ tools · ${callsLabel}`}</Text>
+        <Text color={colors.tool}>{`ran ${toolsLabel}`}</Text>
         <Box flexGrow={1} />
         <Text color={colors.tool} dimColor>
           {formatDuration(totalMs)}
