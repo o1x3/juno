@@ -65,6 +65,8 @@ describe('smoke path', () => {
         outputLimit: 1000,
         readLineLimit: 50,
         bashTimeoutMs: 1000,
+        sessionsDir: config.sessionsDir,
+        sessionId: 'smoke',
       }),
       modelClient,
     });

@@ -14,6 +14,8 @@ function makeContext(cwd: string): ToolContext {
     outputLimit: 4000,
     readLineLimit: 50,
     bashTimeoutMs: 1000,
+    sessionsDir: cwd,
+    sessionId: 'test-session',
   };
 }
 

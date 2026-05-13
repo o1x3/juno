@@ -1,5 +1,5 @@
 import { Box, Text } from 'ink';
-import type { ToolCall, ToolResult } from '@/types';
+import type { TodoItem, ToolCall, ToolResult } from '@/types';
 import { formatDuration, softWrap } from '@/ui/format';
 import { renderMarkdown } from '@/ui/markdown';
 import { colors, glyphs, type ThemeColor } from '@/ui/theme';
@@ -48,6 +48,11 @@ export type TranscriptCell =
       id: string;
       kind: 'plan-note';
       text: string;
+    }
+  | {
+      id: string;
+      kind: 'todo';
+      todos: TodoItem[];
     };
 
 function gutter(glyph: string, color: ThemeColor) {
@@ -274,6 +279,65 @@ export function PlanNoteCell({
   );
 }
 
+export function TodoCell({
+  cell,
+  width,
+}: {
+  cell: Extract<TranscriptCell, { kind: 'todo' }>;
+  width: number;
+}) {
+  const innerWidth = Math.max(20, width - 6);
+  return (
+    <Box flexDirection="column" marginLeft={2} marginBottom={1}>
+      <Text color={colors.plan}>
+        {`${glyphs.plan} plan · ${cell.todos.length} item${cell.todos.length === 1 ? '' : 's'}`}
+      </Text>
+      {cell.todos.length === 0 ? (
+        <Text color={colors.dim} dimColor>
+          (cleared)
+        </Text>
+      ) : (
+        cell.todos.map((item) => {
+          const glyph =
+            item.status === 'completed'
+              ? '[x]'
+              : item.status === 'in_progress'
+                ? '[~]'
+                : '[ ]';
+          const color: ThemeColor =
+            item.status === 'in_progress'
+              ? colors.accent
+              : item.status === 'completed'
+                ? colors.dim
+                : 'white';
+          const text =
+            item.status === 'in_progress' && item.activeForm
+              ? item.activeForm
+              : item.content;
+          const lines = softWrap(text, innerWidth);
+          return (
+            <Box key={item.id} flexDirection="row">
+              <Text color={color}>{`  ${glyph} `}</Text>
+              <Box flexDirection="column">
+                {lines.map((line, i) => (
+                  <Text
+                    key={i}
+                    color={color}
+                    dimColor={item.status === 'completed'}
+                    strikethrough={item.status === 'completed'}
+                  >
+                    {line}
+                  </Text>
+                ))}
+              </Box>
+            </Box>
+          );
+        })
+      )}
+    </Box>
+  );
+}
+
 export function renderCell(cell: TranscriptCell, width: number) {
   switch (cell.kind) {
     case 'user':
@@ -288,5 +352,7 @@ export function renderCell(cell: TranscriptCell, width: number) {
       return <ErrorCell cell={cell} width={width} />;
     case 'plan-note':
       return <PlanNoteCell cell={cell} width={width} />;
+    case 'todo':
+      return <TodoCell cell={cell} width={width} />;
   }
 }

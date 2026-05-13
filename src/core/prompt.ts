@@ -2,7 +2,7 @@ import type { AgentMode, ProjectInstructionSet } from '@/types';
 
 const PLAN_PREAMBLE = [
   'PLAN MODE.',
-  'You can only call Read, Grep, Glob, and LS. Edit, Write, and Bash are unavailable this turn.',
+  'You can only call Read, Grep, Glob, LS, and TodoWrite. Edit, Write, and Bash are unavailable this turn.',
   'Do not propose tool calls that modify the workspace or run commands.',
   'Read enough to understand the change, then end with a numbered plan and an explicit handoff line: "Switch to exec mode (Shift+Tab) to execute."',
 ].join(' ');
@@ -20,6 +20,7 @@ export function buildSystemPrompt(
     'Be direct, critical, and specific.',
     'Use the provided tools when file reads, edits, shell commands, or search are needed.',
     'Prefer minimal reliable changes.',
+    'Use TodoWrite to track a multi-step plan when the work spans several tool calls or files. Pass the full list on every call (replace semantics); keep at most one item in_progress.',
   ];
 
   if (mode === 'plan') {

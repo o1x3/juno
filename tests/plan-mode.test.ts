@@ -17,6 +17,8 @@ const ctx: ToolContext = {
   outputLimit: 1000,
   readLineLimit: 50,
   bashTimeoutMs: 1000,
+  sessionsDir: '/tmp',
+  sessionId: 'x',
 };
 
 describe('buildSystemPrompt', () => {
@@ -43,14 +45,15 @@ describe('buildSystemPrompt', () => {
 });
 
 describe('plan-mode tool allowlist', () => {
-  test('allowlist contains Read, Grep, Glob, LS', () => {
+  test('allowlist contains Read, Grep, Glob, LS, TodoWrite', () => {
     expect(PLAN_MODE_TOOLS.has('Read')).toBe(true);
     expect(PLAN_MODE_TOOLS.has('Grep')).toBe(true);
     expect(PLAN_MODE_TOOLS.has('Glob')).toBe(true);
     expect(PLAN_MODE_TOOLS.has('LS')).toBe(true);
+    expect(PLAN_MODE_TOOLS.has('TodoWrite')).toBe(true);
   });
 
-  test('filterToolsForMode("plan") exposes Glob and LS and drops mutating tools', () => {
+  test('filterToolsForMode("plan") exposes read-only tools and TodoWrite, drops mutating tools', () => {
     const filtered = filterToolsForMode(createBuiltinTools(ctx), 'plan').map(
       (t) => t.name,
     );
@@ -58,6 +61,7 @@ describe('plan-mode tool allowlist', () => {
     expect(filtered).toContain('Grep');
     expect(filtered).toContain('Glob');
     expect(filtered).toContain('LS');
+    expect(filtered).toContain('TodoWrite');
     expect(filtered).not.toContain('Bash');
     expect(filtered).not.toContain('Write');
     expect(filtered).not.toContain('Edit');
@@ -75,6 +79,7 @@ describe('plan-mode tool allowlist', () => {
       'Grep',
       'Glob',
       'LS',
+      'TodoWrite',
     ] as const) {
       expect(filtered).toContain(name);
     }

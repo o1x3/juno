@@ -54,7 +54,21 @@ export type SessionEvent =
       timestamp: string;
       name: string;
       source: 'auto' | 'manual';
+    }
+  | {
+      type: 'todo_update';
+      timestamp: string;
+      todos: TodoItem[];
     };
+
+export type TodoStatus = 'pending' | 'in_progress' | 'completed';
+
+export type TodoItem = {
+  id: string;
+  content: string;
+  status: TodoStatus;
+  activeForm?: string;
+};
 
 export type ToolCall = {
   toolCallId: string;
@@ -76,7 +90,8 @@ export type ToolName =
   | 'Bash'
   | 'Grep'
   | 'Glob'
-  | 'LS';
+  | 'LS'
+  | 'TodoWrite';
 
 export type ToolSpec = {
   name: ToolName;
@@ -93,6 +108,8 @@ export type ToolContext = {
   outputLimit: number;
   readLineLimit: number;
   bashTimeoutMs: number;
+  sessionsDir: string;
+  sessionId: string;
 };
 
 export type CredentialRecord =

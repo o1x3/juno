@@ -45,6 +45,7 @@ export const PLAN_MODE_TOOLS: ReadonlySet<ToolName> = new Set([
   'Grep',
   'Glob',
   'LS',
+  'TodoWrite',
 ]);
 
 type ChatOptions = {
@@ -212,6 +213,8 @@ export async function startOrResumeChat(
     outputLimit: routing.runtimeConfig.toolOutputLimit,
     readLineLimit: routing.runtimeConfig.readLineLimit,
     bashTimeoutMs: routing.runtimeConfig.bashTimeoutMs,
+    sessionsDir: routing.runtimeConfig.sessionsDir,
+    sessionId,
   });
   const tools = filterToolsForMode(allTools, mode);
 

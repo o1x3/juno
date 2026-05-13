@@ -2,12 +2,17 @@ import { Box, Text, useApp, useInput, useStdout } from 'ink';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { resolveAuthSummary, startOrResumeChat } from '@/core/chat-service';
 import { type ConfigFile, saveConfig } from '@/core/config';
-import { findSessionName, readSessionEvents } from '@/core/session-store';
+import {
+  findLatestPlan,
+  findSessionName,
+  readSessionEvents,
+} from '@/core/session-store';
 import { executeShellCommand } from '@/core/tools';
 import type {
   AgentConfig,
   AgentMode,
   ModelUsage,
+  TodoItem,
   ToolCall,
   ToolResult,
 } from '@/types';
@@ -119,6 +124,7 @@ export function ChatApp({
 
   const [paletteIndex, setPaletteIndex] = useState(0);
   const [draftConfig, setDraftConfig] = useState<ConfigFile>({});
+  const [currentPlan, setCurrentPlan] = useState<TodoItem[]>([]);
 
   // Resume: read existing events, populate cells, set name.
   useEffect(() => {
@@ -148,6 +154,17 @@ export function ChatApp({
                 });
               }
             }
+          }
+          const latestPlan = findLatestPlan(events);
+          if (latestPlan && latestPlan.length > 0) {
+            restored.push({
+              id: `e-${restored.length}-plan`,
+              kind: 'todo',
+              todos: latestPlan,
+            });
+            setCurrentPlan(latestPlan);
+          } else if (latestPlan) {
+            setCurrentPlan([]);
           }
           setCells(restored);
           const name = findSessionName(events);
@@ -300,6 +317,19 @@ export function ChatApp({
                   : c,
               ),
             );
+            if (result.toolName === 'TodoWrite' && !result.isError) {
+              const todos = (
+                result.output as { todos?: TodoItem[] } | undefined
+              )?.todos;
+              if (Array.isArray(todos)) {
+                setCurrentPlan(todos);
+                appendCell({
+                  id: `td-${result.toolCallId}`,
+                  kind: 'todo',
+                  todos,
+                });
+              }
+            }
           },
           onUsage: (u) => {
             turnUsageRef.current = u;
@@ -468,6 +498,7 @@ export function ChatApp({
               '  /model       change model',
               '  /clear       clear transcript',
               '  /rename      rename this session',
+              '  /todos       show current plan',
               '  /diff        git diff',
               '  /copy        copy last assistant message',
               '  /exit        quit',
@@ -534,6 +565,21 @@ export function ChatApp({
             text: `current models: exec=${config.execModel}, plan=${config.planModel}. Use /settings to change.`,
           });
           return;
+        case 'todos':
+          if (currentPlan.length === 0) {
+            appendCell({
+              id: `t-${crypto.randomUUID()}`,
+              kind: 'plan-note',
+              text: 'no plan yet — TodoWrite has not been called in this session.',
+            });
+          } else {
+            appendCell({
+              id: `t-${crypto.randomUUID()}`,
+              kind: 'todo',
+              todos: currentPlan,
+            });
+          }
+          return;
         default:
           appendCell({
             id: `u-${crypto.randomUUID()}`,
@@ -543,7 +589,7 @@ export function ChatApp({
           });
       }
     },
-    [appendCell, cells, config, exit, runBashCommand],
+    [appendCell, cells, config, currentPlan, exit, runBashCommand],
   );
 
   // Submit handler — depends on dispatchSlash and runBashCommand defined above.
