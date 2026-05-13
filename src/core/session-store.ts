@@ -1,7 +1,12 @@
 import { appendFile, mkdir, readdir, readFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 
-import type { SerializedMessage, SessionEvent, SessionSummary } from '@/types';
+import type {
+  SerializedMessage,
+  SessionEvent,
+  SessionSummary,
+  TodoItem,
+} from '@/types';
 
 function sessionPath(sessionsDir: string, sessionId: string): string {
   return join(sessionsDir, `${sessionId}.jsonl`);
@@ -56,6 +61,16 @@ export function findSessionName(events: SessionEvent[]): string | undefined {
     }
   }
   return name;
+}
+
+export function findLatestPlan(events: SessionEvent[]): TodoItem[] | undefined {
+  let todos: TodoItem[] | undefined;
+  for (const event of events) {
+    if (event.type === 'todo_update') {
+      todos = event.todos;
+    }
+  }
+  return todos;
 }
 
 export function restoreMessages(events: SessionEvent[]): SerializedMessage[] {

@@ -61,6 +61,8 @@ describe('agent loop', () => {
         outputLimit: 1000,
         readLineLimit: 50,
         bashTimeoutMs: 1000,
+        sessionsDir: config.sessionsDir,
+        sessionId: 's1',
       }),
       modelClient,
     });

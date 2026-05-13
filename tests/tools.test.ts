@@ -24,6 +24,8 @@ describe('builtin tools', () => {
       outputLimit: 200,
       readLineLimit: 50,
       bashTimeoutMs: 1000,
+      sessionsDir: workspace,
+      sessionId: 'test',
     }).find((entry) => entry.name === 'Edit');
     if (!tool) {
       throw new Error('Edit tool missing');
@@ -41,6 +43,8 @@ describe('builtin tools', () => {
         outputLimit: 200,
         readLineLimit: 50,
         bashTimeoutMs: 1000,
+        sessionsDir: workspace,
+        sessionId: 'test',
       },
     );
 
@@ -56,6 +60,8 @@ describe('builtin tools', () => {
       outputLimit: 2,
       readLineLimit: 2,
       bashTimeoutMs: 1000,
+      sessionsDir: workspace,
+      sessionId: 'test',
     }).find((entry) => entry.name === 'Read');
     if (!tool) {
       throw new Error('Read tool missing');
@@ -71,6 +77,8 @@ describe('builtin tools', () => {
         outputLimit: 2,
         readLineLimit: 2,
         bashTimeoutMs: 1000,
+        sessionsDir: workspace,
+        sessionId: 'test',
       },
     );
 

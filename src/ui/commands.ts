@@ -10,6 +10,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: 'model', description: 'Switch model for this session' },
   { name: 'clear', description: 'Clear transcript (keep session)' },
   { name: 'rename', description: 'Rename this session' },
+  { name: 'todos', description: 'Show current plan' },
   { name: 'diff', description: 'Show git diff (uncommitted)' },
   { name: 'copy', description: 'Copy last assistant message' },
   { name: 'exit', description: 'Quit Juno' },

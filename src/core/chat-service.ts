@@ -65,9 +65,14 @@ function pickModelForMode(config: AgentConfig, mode: AgentMode): string {
   return config.execModel;
 }
 
-function filterToolsForMode(tools: ToolSpec[], mode: AgentMode): ToolSpec[] {
+export function filterToolsForMode(
+  tools: ToolSpec[],
+  mode: AgentMode,
+): ToolSpec[] {
   if (mode === 'plan') {
-    return tools.filter((t) => t.name === 'Read' || t.name === 'Grep');
+    return tools.filter(
+      (t) => t.name === 'Read' || t.name === 'Grep' || t.name === 'TodoWrite',
+    );
   }
   return tools;
 }
@@ -201,6 +206,8 @@ export async function startOrResumeChat(
     outputLimit: routing.runtimeConfig.toolOutputLimit,
     readLineLimit: routing.runtimeConfig.readLineLimit,
     bashTimeoutMs: routing.runtimeConfig.bashTimeoutMs,
+    sessionsDir: routing.runtimeConfig.sessionsDir,
+    sessionId,
   });
   const tools = filterToolsForMode(allTools, mode);
 

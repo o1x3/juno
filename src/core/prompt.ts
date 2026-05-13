@@ -20,6 +20,7 @@ export function buildSystemPrompt(
     'Be direct, critical, and specific.',
     'Use the provided tools when file reads, edits, shell commands, or search are needed.',
     'Prefer minimal reliable changes.',
+    'Use TodoWrite to track a multi-step plan when the work spans several tool calls or files. Pass the full list on every call (replace semantics); keep at most one item in_progress.',
   ];
 
   if (mode === 'plan') {
