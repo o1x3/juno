@@ -21,14 +21,6 @@ function estimateUsage(input: string, output: string): ModelUsage {
   };
 }
 
-const KNOWN_TOOL_NAMES: ReadonlySet<ToolName> = new Set([
-  'Read',
-  'Write',
-  'Edit',
-  'Bash',
-  'Grep',
-]);
-
 type CodexClientConfig = {
   baseUrl: string;
   accessToken: string;
@@ -257,12 +249,6 @@ function friendlyError(status: number, raw: string): Error {
   return new Error(`Codex backend error ${status}: ${message}`);
 }
 
-function asToolName(name: string): ToolName | undefined {
-  return KNOWN_TOOL_NAMES.has(name as ToolName)
-    ? (name as ToolName)
-    : undefined;
-}
-
 type PendingFunctionCall = {
   name: string;
   callId: string;
@@ -307,6 +293,8 @@ export function createCodexResponsesClient(
       if (tools.length > 0) {
         body.tools = buildCodexTools(tools);
       }
+
+      const validToolNames = new Set<ToolName>(tools.map((t) => t.name));
 
       const headers = buildCodexHeaders({ ...config, accountId });
       const url = resolveCodexUrl(config.baseUrl);
@@ -383,7 +371,14 @@ export function createCodexResponsesClient(
               asString(item.id) ??
               '';
             const argsText = asString(item.arguments) ?? entry?.args ?? '';
-            const toolName = asToolName(name);
+            const toolName = validToolNames.has(name as ToolName)
+              ? (name as ToolName)
+              : undefined;
+            if (!toolName && name) {
+              console.warn(
+                `[juno] Codex returned function_call for unknown tool '${name}'; ignoring`,
+              );
+            }
             if (toolName && callId) {
               let parsedArgs: Record<string, unknown> = {};
               if (argsText) {

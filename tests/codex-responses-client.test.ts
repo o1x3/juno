@@ -151,6 +151,45 @@ function sse(events: Array<Record<string, unknown>>): Response {
   });
 }
 
+function toolSpec(name: ToolSpec['name']): ToolSpec {
+  return {
+    name,
+    description: `${name} tool`,
+    inputSchema: z.object({}).passthrough(),
+    execute: async () => ({ toolCallId: 'unused', toolName: name, output: '' }),
+  };
+}
+
+function functionCallEvents(
+  name: string,
+  callId: string,
+  argsJson: string,
+): Array<Record<string, unknown>> {
+  return [
+    {
+      type: 'response.output_item.added',
+      output_index: 0,
+      item: { type: 'function_call', name, call_id: callId, arguments: '' },
+    },
+    {
+      type: 'response.function_call_arguments.delta',
+      output_index: 0,
+      delta: argsJson,
+    },
+    {
+      type: 'response.output_item.done',
+      output_index: 0,
+      item: {
+        type: 'function_call',
+        name,
+        call_id: callId,
+        arguments: argsJson,
+      },
+    },
+    { type: 'response.completed', response: { status: 'completed' } },
+  ];
+}
+
 describe('createCodexResponsesClient runStep', () => {
   test('emits text deltas and finalizes a function call', async () => {
     let captured: { url: string; init: RequestInit } | undefined;
@@ -204,7 +243,7 @@ describe('createCodexResponsesClient runStep', () => {
       model: 'gpt-5.1-codex-mini',
       systemPrompt: 'system',
       messages: [{ role: 'user', content: 'list files' }],
-      tools: [],
+      tools: [toolSpec('Bash')],
       onTextDelta: (delta) => {
         textOut += delta;
       },
@@ -269,5 +308,95 @@ describe('createCodexResponsesClient runStep', () => {
         tools: [],
       }),
     ).rejects.toThrow(/usage limit reached/i);
+  });
+
+  test('routes function_call for LS when LS is in the tool list', async () => {
+    const fakeFetch = (async () =>
+      sse(
+        functionCallEvents('LS', 'call-ls', '{"path":"."}'),
+      )) as unknown as typeof fetch;
+
+    const client = createCodexResponsesClient({
+      baseUrl: 'https://chatgpt.com/backend-api',
+      accessToken: FAKE_JWT,
+      accountId: 'acct-1',
+      fetchImpl: fakeFetch,
+    });
+
+    const calls: string[] = [];
+    const result = await client.runStep({
+      model: 'gpt-5.4',
+      systemPrompt: '',
+      messages: [{ role: 'user', content: 'what is in this dir' }],
+      tools: [toolSpec('LS')],
+      onToolCall: (call) => calls.push(`${call.toolName}:${call.toolCallId}`),
+    });
+
+    expect(calls).toEqual(['LS:call-ls']);
+    expect(result.toolCalls).toEqual([
+      { toolCallId: 'call-ls', toolName: 'LS', input: { path: '.' } },
+    ]);
+  });
+
+  test('routes function_call for TodoWrite when TodoWrite is in the tool list', async () => {
+    const fakeFetch = (async () =>
+      sse(
+        functionCallEvents(
+          'TodoWrite',
+          'call-td',
+          '{"todos":[{"id":"a","content":"x","status":"pending"}]}',
+        ),
+      )) as unknown as typeof fetch;
+
+    const client = createCodexResponsesClient({
+      baseUrl: 'https://chatgpt.com/backend-api',
+      accessToken: FAKE_JWT,
+      accountId: 'acct-1',
+      fetchImpl: fakeFetch,
+    });
+
+    const calls: string[] = [];
+    const result = await client.runStep({
+      model: 'gpt-5.4',
+      systemPrompt: '',
+      messages: [{ role: 'user', content: 'plan it' }],
+      tools: [toolSpec('TodoWrite')],
+      onToolCall: (call) => calls.push(`${call.toolName}:${call.toolCallId}`),
+    });
+
+    expect(calls).toEqual(['TodoWrite:call-td']);
+    expect(result.toolCalls.length).toBe(1);
+    expect(result.toolCalls[0]?.toolName).toBe('TodoWrite');
+  });
+
+  test('ignores function_call for a tool not in the tool list', async () => {
+    const fakeFetch = (async () =>
+      sse(
+        functionCallEvents('Unknown', 'call-x', '{}'),
+      )) as unknown as typeof fetch;
+
+    const client = createCodexResponsesClient({
+      baseUrl: 'https://chatgpt.com/backend-api',
+      accessToken: FAKE_JWT,
+      accountId: 'acct-1',
+      fetchImpl: fakeFetch,
+    });
+
+    const calls: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = () => {};
+    try {
+      const result = await client.runStep({
+        model: 'gpt-5.4',
+        systemPrompt: '',
+        messages: [{ role: 'user', content: 'go' }],
+        tools: [toolSpec('LS')],
+        onToolCall: (call) => calls.push(call.toolName),
+      });
+      expect(calls).toEqual([]);
+      expect(result.toolCalls).toEqual([]);
+    } finally {
+      console.warn = originalWarn;
+    }
   });
 });
