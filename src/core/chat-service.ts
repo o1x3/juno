@@ -35,9 +35,18 @@ import type {
   ModelFallback,
   ModelUsage,
   ToolCall,
+  ToolName,
   ToolResult,
   ToolSpec,
 } from '@/types';
+
+export const PLAN_MODE_TOOLS: ReadonlySet<ToolName> = new Set([
+  'Read',
+  'Grep',
+  'Glob',
+  'LS',
+  'TodoWrite',
+]);
 
 type ChatOptions = {
   config: AgentConfig;
@@ -70,9 +79,7 @@ export function filterToolsForMode(
   mode: AgentMode,
 ): ToolSpec[] {
   if (mode === 'plan') {
-    return tools.filter(
-      (t) => t.name === 'Read' || t.name === 'Grep' || t.name === 'TodoWrite',
-    );
+    return tools.filter((t) => PLAN_MODE_TOOLS.has(t.name));
   }
   return tools;
 }

@@ -2,7 +2,7 @@ import type { AgentMode, ProjectInstructionSet } from '@/types';
 
 const PLAN_PREAMBLE = [
   'PLAN MODE.',
-  'You can only call Read and Grep. Edit, Write, and Bash are unavailable this turn.',
+  'You can only call Read, Grep, Glob, LS, and TodoWrite. Edit, Write, and Bash are unavailable this turn.',
   'Do not propose tool calls that modify the workspace or run commands.',
   'Read enough to understand the change, then end with a numbered plan and an explicit handoff line: "Switch to exec mode (Shift+Tab) to execute."',
 ].join(' ');

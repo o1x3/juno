@@ -89,6 +89,8 @@ export type ToolName =
   | 'Edit'
   | 'Bash'
   | 'Grep'
+  | 'Glob'
+  | 'LS'
   | 'TodoWrite';
 
 export type ToolSpec = {
