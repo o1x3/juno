@@ -1,9 +1,36 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { relative, resolve, sep } from 'node:path';
 
 import { z } from 'zod';
 
 import { ensureParent, resolveInside, truncateText } from '@/core/fs';
 import type { ToolContext, ToolResult, ToolSpec } from '@/types';
+
+const GLOB_RESULT_LIMIT = 1000;
+const LS_RESULT_LIMIT = 500;
+const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', '.claude']);
+
+function ensureInsideWorkspace(root: string, target: string): void {
+  const rootResolved = resolve(root);
+  const targetResolved = resolve(target);
+  if (targetResolved === rootResolved) return;
+  const prefix = rootResolved.endsWith(sep) ? rootResolved : rootResolved + sep;
+  if (!targetResolved.startsWith(prefix)) {
+    throw new Error(`path escapes workspace: ${target}`);
+  }
+}
+
+function relativeToRoot(root: string, target: string): string {
+  const rel = relative(resolve(root), resolve(target));
+  return rel === '' ? '.' : rel;
+}
+
+function hasSkippedSegment(relPath: string): boolean {
+  for (const segment of relPath.split('/')) {
+    if (SKIP_DIRS.has(segment)) return true;
+  }
+  return false;
+}
 
 export type ShellResult = {
   stdout: string;
@@ -260,6 +287,147 @@ export function createBuiltinTools(context: ToolContext): ToolSpec[] {
           return fail(
             toolCallId,
             'Grep',
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+      },
+    },
+    {
+      name: 'Glob',
+      description:
+        'Find files matching a glob pattern (e.g. "**/*.ts"). Returns workspace-relative paths sorted by mtime desc. Skips node_modules, .git, dist, .claude.',
+      inputSchema: z.object({
+        pattern: z.string(),
+        cwd: z.string().optional(),
+      }),
+      execute: async (input) => {
+        const toolCallId = String(input.toolCallId ?? crypto.randomUUID());
+        try {
+          const pattern = String(input.pattern);
+          const requestedCwd =
+            input.cwd === undefined ? '.' : String(input.cwd);
+          const effective = resolveInside(context.cwd, requestedCwd);
+          ensureInsideWorkspace(context.cwd, effective);
+
+          const collected: { path: string; mtime: number }[] = [];
+          let truncated = false;
+          const glob = new Bun.Glob(pattern);
+          for await (const rel of glob.scan({
+            cwd: effective,
+            dot: true,
+          })) {
+            const normalized = rel.split(sep).join('/');
+            if (hasSkippedSegment(normalized)) continue;
+            const absolute = resolve(effective, rel);
+            let mtime = 0;
+            try {
+              const info = await stat(absolute);
+              mtime = info.mtimeMs;
+            } catch {
+              continue;
+            }
+            collected.push({
+              path: relativeToRoot(context.cwd, absolute),
+              mtime,
+            });
+            if (collected.length > GLOB_RESULT_LIMIT) {
+              truncated = true;
+              break;
+            }
+          }
+          collected.sort((a, b) => b.mtime - a.mtime);
+          if (collected.length > GLOB_RESULT_LIMIT) {
+            collected.length = GLOB_RESULT_LIMIT;
+          }
+          return ok(toolCallId, 'Glob', {
+            cwd: relativeToRoot(context.cwd, effective),
+            pattern,
+            matches: collected.map((entry) => entry.path),
+            count: collected.length,
+            truncated,
+            truncationMarker: truncated
+              ? `... (truncated: showing first ${GLOB_RESULT_LIMIT} results sorted by mtime desc)`
+              : undefined,
+          });
+        } catch (error) {
+          return fail(
+            toolCallId,
+            'Glob',
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+      },
+    },
+    {
+      name: 'LS',
+      description:
+        'List the immediate entries of a directory inside the workspace. Dotfiles hidden unless hidden=true. Non-recursive; use Glob for recursive search.',
+      inputSchema: z.object({
+        path: z.string(),
+        hidden: z.boolean().optional(),
+      }),
+      execute: async (input) => {
+        const toolCallId = String(input.toolCallId ?? crypto.randomUUID());
+        try {
+          const requestedPath = String(input.path);
+          const showHidden = Boolean(input.hidden);
+          const effective = resolveInside(context.cwd, requestedPath);
+          ensureInsideWorkspace(context.cwd, effective);
+
+          const dirents = await readdir(effective, { withFileTypes: true });
+          const entries: {
+            name: string;
+            type: 'dir' | 'file' | 'symlink';
+            size?: number;
+          }[] = [];
+          for (const dirent of dirents) {
+            if (!showHidden && dirent.name.startsWith('.')) continue;
+            let type: 'dir' | 'file' | 'symlink';
+            if (dirent.isSymbolicLink()) type = 'symlink';
+            else if (dirent.isDirectory()) type = 'dir';
+            else if (dirent.isFile()) type = 'file';
+            else continue;
+
+            const entry: { name: string; type: typeof type; size?: number } = {
+              name: dirent.name,
+              type,
+            };
+            if (type === 'file') {
+              try {
+                const info = await stat(resolve(effective, dirent.name));
+                entry.size = info.size;
+              } catch {
+                // ignore stat failure; omit size
+              }
+            }
+            entries.push(entry);
+          }
+
+          entries.sort((a, b) => {
+            if (a.type === 'dir' && b.type !== 'dir') return -1;
+            if (a.type !== 'dir' && b.type === 'dir') return 1;
+            return a.name.localeCompare(b.name);
+          });
+
+          let truncated = false;
+          if (entries.length > LS_RESULT_LIMIT) {
+            truncated = true;
+            entries.length = LS_RESULT_LIMIT;
+          }
+
+          return ok(toolCallId, 'LS', {
+            path: relativeToRoot(context.cwd, effective),
+            entries,
+            count: entries.length,
+            truncated,
+            truncationMarker: truncated
+              ? `... (truncated: showing first ${LS_RESULT_LIMIT} entries)`
+              : undefined,
+          });
+        } catch (error) {
+          return fail(
+            toolCallId,
+            'LS',
             error instanceof Error ? error.message : String(error),
           );
         }

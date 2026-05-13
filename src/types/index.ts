@@ -69,7 +69,14 @@ export type ToolResult = {
   isError?: boolean;
 };
 
-export type ToolName = 'Read' | 'Write' | 'Edit' | 'Bash' | 'Grep';
+export type ToolName =
+  | 'Read'
+  | 'Write'
+  | 'Edit'
+  | 'Bash'
+  | 'Grep'
+  | 'Glob'
+  | 'LS';
 
 export type ToolSpec = {
   name: ToolName;
