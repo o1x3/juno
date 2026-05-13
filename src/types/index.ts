@@ -171,6 +171,8 @@ export type AgentConfig = {
   codexBackendUrl: string;
   codexModelOverride?: string;
   ui: UiPreferences;
+  autoUpgrade: boolean;
+  updateCheckEnabled: boolean;
 };
 
 export type AuthMode = 'api-key' | 'oauth-api-key' | 'oauth-codex' | 'none';

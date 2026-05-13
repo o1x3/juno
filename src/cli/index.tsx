@@ -11,6 +11,17 @@ import {
 } from '@/core/chat-service';
 import { resolveConfig } from '@/core/config';
 import { listSessions } from '@/core/session-store';
+import {
+  performUninstall,
+  removePathBlockFromShellRcs,
+} from '@/core/uninstall';
+import {
+  detectInstallContext,
+  fetchLatestTag,
+  performUpgrade,
+  rollbackBinary,
+  stripV,
+} from '@/core/upgrade';
 import type { AuthStatus } from '@/types';
 import { ChatApp } from '@/ui/chat-app';
 import { VERSION } from '@/version';
@@ -259,6 +270,192 @@ const authCommand = defineCommand({
   },
 });
 
+const upgradeCommand = defineCommand({
+  meta: {
+    name: 'upgrade',
+    description: 'Self-update juno to the latest release.',
+  },
+  args: {
+    check: {
+      type: 'boolean',
+      description: 'Only print current and latest versions; do not upgrade.',
+    },
+    version: {
+      type: 'string',
+      description: 'Install a specific tag (e.g. v0.2.1) instead of latest.',
+    },
+    yes: {
+      type: 'boolean',
+      description: 'Non-interactive; do not prompt.',
+    },
+    rollback: {
+      type: 'boolean',
+      description: 'Restore the previously installed binary (.old).',
+    },
+  },
+  async run({ args }) {
+    const execPath = process.execPath;
+
+    if (args.rollback) {
+      const result = rollbackBinary(execPath);
+      process.stdout.write(
+        `rolled back to previous binary at ${result.restored}\n`,
+      );
+      return;
+    }
+
+    if (args.check) {
+      const tag = await fetchLatestTag({});
+      const latest = stripV(tag);
+      const current = VERSION;
+      const status =
+        latest === current
+          ? 'up-to-date'
+          : `newer available (run: juno upgrade)`;
+      process.stdout.write(
+        `current: ${current}\nlatest:  ${latest}\nstatus:  ${status}\n`,
+      );
+      return;
+    }
+
+    const ctx = detectInstallContext(execPath);
+    if (ctx.kind === 'homebrew' || ctx.kind === 'npm') {
+      process.stdout.write(
+        `juno is installed via ${ctx.kind}. Run: ${ctx.command}\n`,
+      );
+      return;
+    }
+    if (ctx.kind === 'standalone' && !ctx.writable) {
+      process.stderr.write(
+        `juno is installed at ${ctx.execPath} but is not writable by the current user.\n` +
+          `Re-run as the install owner, or reinstall with: curl -sSfL https://raw.githubusercontent.com/o1x3/juno/main/scripts/install.sh | sh\n`,
+      );
+      process.exitCode = 1;
+      return;
+    }
+
+    const outcome = await performUpgrade({
+      current: VERSION,
+      targetTag: args.version,
+      execPath,
+    });
+
+    switch (outcome.status) {
+      case 'up-to-date':
+        process.stdout.write(
+          `already at latest version (${outcome.current})\n`,
+        );
+        return;
+      case 'managed':
+        if (
+          outcome.context.kind === 'homebrew' ||
+          outcome.context.kind === 'npm'
+        ) {
+          process.stdout.write(
+            `juno is managed by ${outcome.context.kind}; run: ${outcome.context.command}\n`,
+          );
+        }
+        return;
+      case 'not-writable':
+        process.stderr.write(
+          `auto-upgrade failed: ${outcome.execPath} is not writable\n`,
+        );
+        process.exitCode = 1;
+        return;
+      case 'upgraded':
+        process.stdout.write(
+          `upgraded ${outcome.from} → ${outcome.to}\nbinary: ${outcome.execPath}\nprevious kept at: ${outcome.backupPath}\n`,
+        );
+        return;
+    }
+  },
+});
+
+const uninstallCommand = defineCommand({
+  meta: {
+    name: 'uninstall',
+    description: 'Remove the juno binary and (optionally) all local data.',
+  },
+  args: {
+    purge: {
+      type: 'boolean',
+      description: 'Also remove $JUNO_HOME (sessions, auth, config).',
+    },
+    'keep-config': {
+      type: 'boolean',
+      description: 'Keep $JUNO_HOME even if it exists (default).',
+    },
+    yes: {
+      type: 'boolean',
+      description: 'Non-interactive; do not prompt.',
+    },
+    'dry-run': {
+      type: 'boolean',
+      description: 'Print what would be removed; do nothing.',
+    },
+  },
+  async run({ args }) {
+    const config = resolveConfig();
+    const execPath = process.execPath;
+    const ctx = detectInstallContext(execPath);
+
+    if (ctx.kind === 'homebrew' || ctx.kind === 'npm') {
+      process.stdout.write(
+        `juno is installed via ${ctx.kind}; uninstall with: ${ctx.command.replace('upgrade', 'uninstall').replace('install -g', 'uninstall -g')}\n`,
+      );
+      return;
+    }
+
+    const plan = {
+      binary: ctx.execPath,
+      backup: `${ctx.execPath}.old`,
+      home: args.purge ? config.homeDir : undefined,
+    };
+
+    process.stdout.write(
+      `will remove:\n  ${plan.binary}\n  ${plan.backup} (if present)\n`,
+    );
+    if (plan.home) {
+      process.stdout.write(`  ${plan.home} (--purge)\n`);
+    }
+
+    if (args['dry-run']) {
+      const removed = removePathBlockFromShellRcs({ dryRun: true });
+      if (removed.length) {
+        process.stdout.write(
+          `would clean PATH block from: ${removed.join(', ')}\n`,
+        );
+      }
+      return;
+    }
+
+    if (!args.yes) {
+      const answer =
+        typeof globalThis.prompt === 'function'
+          ? globalThis.prompt('Proceed? [y/N] ')
+          : null;
+      if (!answer || !/^y(es)?$/i.test(answer.trim())) {
+        process.stdout.write('aborted\n');
+        return;
+      }
+    }
+
+    const result = await performUninstall({
+      execPath: ctx.execPath,
+      homeDir: plan.home,
+    });
+    const cleaned = removePathBlockFromShellRcs({ dryRun: false });
+
+    for (const removed of result.removed) {
+      process.stdout.write(`removed: ${removed}\n`);
+    }
+    for (const file of cleaned) {
+      process.stdout.write(`cleaned PATH block from: ${file}\n`);
+    }
+    process.stdout.write('uninstalled.\n');
+  },
+});
+
 const main = defineCommand({
   meta: {
     name: 'juno',
@@ -272,6 +469,8 @@ const main = defineCommand({
     resume: resumeCommand,
     sessions: sessionsCommand,
     auth: authCommand,
+    upgrade: upgradeCommand,
+    uninstall: uninstallCommand,
   },
 });
 

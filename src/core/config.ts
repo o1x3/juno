@@ -36,6 +36,8 @@ export const configFileSchema = z
     bashTimeoutMs: z.number().int().positive().finite().optional(),
     codexBackendUrl: z.string().trim().min(1).optional(),
     codexModel: z.string().trim().min(1).optional(),
+    autoUpgrade: z.boolean().optional(),
+    updateCheckEnabled: z.boolean().optional(),
     ui: uiSchema.optional(),
   })
   .strict();
@@ -221,6 +223,20 @@ export function resolveConfig(overrides: ConfigOverrides = {}): AgentConfig {
   const codexModelOverride =
     process.env.JUNO_CODEX_MODEL ?? fileConfig.codexModel;
 
+  const autoUpgrade =
+    parseBoolEnv('JUNO_AUTO_UPGRADE', process.env.JUNO_AUTO_UPGRADE) ??
+    fileConfig.autoUpgrade ??
+    true;
+  // JUNO_DISABLE_UPDATE_CHECK=1 takes precedence; otherwise inverted form of enabled
+  const disableUpdateCheck = parseBoolEnv(
+    'JUNO_DISABLE_UPDATE_CHECK',
+    process.env.JUNO_DISABLE_UPDATE_CHECK,
+  );
+  const updateCheckEnabled =
+    disableUpdateCheck === true
+      ? false
+      : (fileConfig.updateCheckEnabled ?? true);
+
   return {
     cwd,
     homeDir,
@@ -242,6 +258,8 @@ export function resolveConfig(overrides: ConfigOverrides = {}): AgentConfig {
     codexBackendUrl,
     codexModelOverride,
     ui: resolveUi(fileConfig.ui),
+    autoUpgrade,
+    updateCheckEnabled,
   };
 }
 

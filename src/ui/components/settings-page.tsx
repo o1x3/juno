@@ -145,6 +145,25 @@ function buildSections(draft: ConfigFile): SettingSection[] {
         },
       ],
     },
+    {
+      title: 'updates',
+      fields: [
+        {
+          kind: 'toggle',
+          id: 'autoUpgrade',
+          label: 'auto-upgrade',
+          description: 'silently install new releases on TUI start',
+          value: draft.autoUpgrade ?? true,
+        },
+        {
+          kind: 'toggle',
+          id: 'updateCheckEnabled',
+          label: 'update check',
+          description: 'background check GitHub releases on TUI start',
+          value: draft.updateCheckEnabled ?? true,
+        },
+      ],
+    },
   ];
 }
 

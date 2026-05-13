@@ -1,3 +1,4 @@
+import { join } from 'node:path';
 import { Box, Text, useApp, useInput, useStdout } from 'ink';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { resolveAuthSummary, startOrResumeChat } from '@/core/chat-service';
@@ -8,6 +9,11 @@ import {
   readSessionEvents,
 } from '@/core/session-store';
 import { executeShellCommand } from '@/core/tools';
+import {
+  checkForUpdate,
+  detectInstallContext,
+  performUpgrade,
+} from '@/core/upgrade';
 import type {
   AgentConfig,
   AgentMode,
@@ -28,6 +34,7 @@ import { clampScroll, truncatePath } from '@/ui/format';
 import { matchKeybind } from '@/ui/keybinds';
 import { computeChatHeight } from '@/ui/layout';
 import { colors, glyphs, modeAccent } from '@/ui/theme';
+import { VERSION } from '@/version';
 
 type ChatAppProps = {
   config: AgentConfig;
@@ -125,6 +132,72 @@ export function ChatApp({
   const [paletteIndex, setPaletteIndex] = useState(0);
   const [draftConfig, setDraftConfig] = useState<ConfigFile>({});
   const [currentPlan, setCurrentPlan] = useState<TodoItem[]>([]);
+  const [upgradeStatus, setUpgradeStatus] = useState<string | undefined>(
+    undefined,
+  );
+
+  // Background update check (and silent auto-upgrade if enabled).
+  useEffect(() => {
+    if (!config.updateCheckEnabled) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const cachePath = join(config.homeDir, 'version.json');
+        const check = await checkForUpdate({
+          current: VERSION,
+          cachePath,
+        });
+        if (cancelled || !check.hasUpdate || check.dismissed) return;
+        if (!config.autoUpgrade) {
+          setUpgradeStatus(
+            `update available: v${check.latest} — run juno upgrade`,
+          );
+          return;
+        }
+        const ctx = detectInstallContext();
+        if (ctx.kind !== 'standalone') {
+          setUpgradeStatus(
+            `update available: v${check.latest} — managed install, run \`${ctx.kind === 'homebrew' ? ctx.command : ctx.kind === 'npm' ? ctx.command : 'juno upgrade'}\``,
+          );
+          return;
+        }
+        if (!ctx.writable) {
+          setUpgradeStatus(
+            `auto-upgrade disabled: ${ctx.execPath} not writable`,
+          );
+          return;
+        }
+        setUpgradeStatus(`upgrading to v${check.latest}…`);
+        try {
+          const outcome = await performUpgrade({
+            current: VERSION,
+            cachePath,
+          });
+          if (cancelled) return;
+          if (outcome.status === 'upgraded') {
+            setUpgradeStatus(
+              `upgraded to v${outcome.to} (active on next launch)`,
+            );
+          } else if (outcome.status === 'up-to-date') {
+            setUpgradeStatus(undefined);
+          } else if (outcome.status === 'not-writable') {
+            setUpgradeStatus(
+              `auto-upgrade failed: ${outcome.execPath} not writable`,
+            );
+          }
+        } catch (error) {
+          if (cancelled) return;
+          const reason = error instanceof Error ? error.message : String(error);
+          setUpgradeStatus(`auto-upgrade failed: ${reason}`);
+        }
+      } catch {
+        // Network errors etc are silent — never block the TUI.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [config.updateCheckEnabled, config.autoUpgrade, config.homeDir]);
 
   // Resume: read existing events, populate cells, set name.
   useEffect(() => {
@@ -879,6 +952,13 @@ export function ChatApp({
               : '⏎ send · ⌃J newline · ⇧⇥ plan/exec · ! bash · / commands · ⌃G pane · ⌃C ✕'}
         </Text>
       </Box>
+      {upgradeStatus && (
+        <Box paddingX={1}>
+          <Text color={colors.dim} dimColor>
+            {upgradeStatus}
+          </Text>
+        </Box>
+      )}
     </Box>
   );
 }

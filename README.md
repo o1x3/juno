@@ -45,9 +45,52 @@ The fastest way to install the latest tagged build:
 curl -sSfL https://raw.githubusercontent.com/o1x3/juno/main/scripts/install.sh | sh
 ```
 
-The script detects your OS/arch (macOS or Linux, x64 or arm64), downloads the matching tarball from the latest GitHub release, verifies its SHA-256 against `checksums.txt`, and drops the binary at `/usr/local/bin/juno`. macOS users have the Gatekeeper quarantine attribute stripped automatically.
+The script detects your OS/arch (macOS or Linux, x64 or arm64), downloads the matching tarball from the latest GitHub release, verifies its SHA-256 against `checksums.txt`, and drops the binary at `~/.local/bin/juno`. On Apple Silicon under Rosetta it installs the native arm64 build instead of x64. On macOS Gatekeeper's quarantine attribute is stripped automatically.
 
-If you prefer a manual install: grab `juno-<version>-<os>-<arch>.tar.gz` plus `checksums.txt` from the [releases page](https://github.com/o1x3/juno/releases), verify the checksum, extract, `chmod +x juno`, and move it to `/usr/local/bin/juno`. On macOS you may need `xattr -dr com.apple.quarantine /usr/local/bin/juno`.
+If `~/.local/bin` isn't on your `$PATH`, the installer appends a fenced PATH-export block (`# >>> juno install >>>` … `# <<< juno install <<<`) to your shell rc file (`~/.zshenv`, `~/.bashrc` / `~/.bash_profile`, `~/.config/fish/conf.d/juno.fish`, or `~/.profile`). Open a new shell or `exec $SHELL` to pick it up. Pass `--no-modify-path` (or set `JUNO_NO_MODIFY_PATH=1`) to skip the edit and just print the line to add.
+
+Installer flags:
+
+| Flag | Env equivalent | Effect |
+| --- | --- | --- |
+| `--install-dir <path>` | `JUNO_INSTALL_DIR` | Install location (default `$HOME/.local/bin`). |
+| `--system` | — | Shortcut for `--install-dir /usr/local/bin`. Auto-upgrade will not work there. |
+| `--sudo` | — | Use `sudo` to write into a non-writable install dir. |
+| `--version <tag>` | `VERSION` | Install a pinned tag (`v0.2.1`) instead of latest. |
+| `--no-modify-path` | `JUNO_NO_MODIFY_PATH=1` | Don't edit shell rc files. |
+| `--quiet` | — | Plain CI-friendly output (no wordmark, no `\r` redraws). |
+| `--dry-run` | — | Print the plan and exit; download nothing. |
+
+Manual install: grab `juno-<version>-<os>-<arch>.tar.gz` plus `checksums.txt` from the [releases page](https://github.com/o1x3/juno/releases), verify the checksum, extract, `chmod +x juno`, and move it onto `$PATH`. On macOS you may need `xattr -dr com.apple.quarantine /path/to/juno`.
+
+### Upgrading
+
+```sh
+juno upgrade            # in-place self-update to the latest release
+juno upgrade --check    # print current vs latest; no download
+juno upgrade --version v0.2.1
+juno upgrade --rollback # restore the previous binary (kept as juno.old)
+```
+
+`juno upgrade` works for the standalone curl-installed binary (the install dir must be writable). It refuses to touch managed installs (`/opt/homebrew`, `node_modules/`) and prints the right command for those package managers instead. The TUI also performs a background update check on startup and, by default, **silently auto-upgrades** if a newer release is available and the install path is writable; the status line shows `upgraded to vX.Y.Z (active on next launch)` or `auto-upgrade failed: …` when something goes wrong. Disable via `/settings` (Auto-upgrade toggle) or `JUNO_AUTO_UPGRADE=0`. Suppress the check entirely with `JUNO_DISABLE_UPDATE_CHECK=1`.
+
+### Uninstalling
+
+If juno is on your PATH:
+
+```sh
+juno uninstall              # removes the binary, .old backup, and PATH rc block
+juno uninstall --purge      # also removes ~/.juno (sessions, auth, config)
+juno uninstall --dry-run    # print what would be removed
+```
+
+If juno is broken or missing, run the standalone script:
+
+```sh
+curl -sSfL https://raw.githubusercontent.com/o1x3/juno/main/scripts/uninstall.sh | sh
+```
+
+It walks the common install dirs (`~/.local/bin`, `/usr/local/bin`, `$JUNO_INSTALL_DIR`), removes any `juno` binaries it finds, strips the PATH block from each shell rc, and (with `--purge`) deletes `~/.juno`.
 
 ### From source
 

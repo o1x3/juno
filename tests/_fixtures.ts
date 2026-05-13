@@ -25,6 +25,8 @@ export function makeConfig(
     bashTimeoutMs: 1000,
     codexBackendUrl: 'https://chatgpt.com/backend-api',
     ui: { ...DEFAULT_UI },
+    autoUpgrade: false,
+    updateCheckEnabled: false,
     ...overrides,
   };
 }
