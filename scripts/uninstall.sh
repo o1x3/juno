@@ -126,12 +126,16 @@ remove_path() {
         miss "$target (not present)"
         return
     fi
-    if [ -w "$(dirname "$target")" ] || [ -w "$target" ]; then
+    # Unlinking a file requires write access on the parent dir, not the file
+    # itself. /usr/local/bin/juno may be user-owned while /usr/local/bin is
+    # root-only — we still need sudo there.
+    parent="$(dirname "$target")"
+    if [ -w "$parent" ]; then
         rm -rf "$target"
     elif command -v sudo >/dev/null 2>&1; then
         sudo rm -rf "$target"
     else
-        warn "no permission to remove $target"
+        warn "no permission to remove $target (parent dir $parent not writable)"
         return
     fi
     ok "removed $target"

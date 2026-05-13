@@ -222,8 +222,10 @@ fi
 fetch() {
     url="$1"; out="$2"
     if [ "$have_curl" -eq 1 ]; then
+        # `-f` (in -sSfL) already fails on HTTP errors; --fail-with-body needs
+        # curl 7.76+ which isn't on every macOS so we skip it for compatibility.
         curl --proto '=https' --tlsv1.2 -sSfL --retry 3 --retry-delay 2 \
-             --retry-connrefused --fail-with-body "$url" -o "$out"
+             --retry-connrefused "$url" -o "$out"
     else
         wget -q --tries=3 --timeout=20 "$url" -O "$out"
     fi
@@ -233,7 +235,7 @@ fetch_stdout() {
     url="$1"
     if [ "$have_curl" -eq 1 ]; then
         curl --proto '=https' --tlsv1.2 -sSfL --retry 3 --retry-delay 2 \
-             --retry-connrefused --fail-with-body "$url"
+             --retry-connrefused "$url"
     else
         wget -qO- --tries=3 --timeout=20 "$url"
     fi
