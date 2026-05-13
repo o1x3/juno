@@ -27,6 +27,12 @@ describe('buildSystemPrompt', () => {
     expect(out).not.toContain('PLAN MODE');
   });
 
+  test('exec mode includes action-bias rule', () => {
+    const out = buildSystemPrompt(empty, 'exec');
+    expect(out).toContain('Default to action');
+    expect(out).toContain('this dir');
+  });
+
   test('plan mode includes plan preamble and forbids write tools', () => {
     const out = buildSystemPrompt(empty, 'plan');
     expect(out).toContain('PLAN MODE');
