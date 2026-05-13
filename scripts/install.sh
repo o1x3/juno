@@ -494,13 +494,72 @@ if [ "$QUIET" -eq 0 ]; then
             fi
             ;;
     esac
+
+    # ---- box renderer ----
+    # Box width adapts to the terminal so paths fit; bounded 40..78 inner cols.
+    TERM_W=$(tput cols 2>/dev/null || echo 80)
+    INNER=$((TERM_W - 6))
+    [ "$INNER" -gt 78 ] && INNER=78
+    [ "$INNER" -lt 40 ] && INNER=40
+
+    repeat_char() {
+        # repeat_char <count> <char> -> stdout
+        n=$1; ch=$2
+        out=""; i=0
+        while [ "$i" -lt "$n" ]; do out="${out}${ch}"; i=$((i + 1)); done
+        printf "%s" "$out"
+    }
+
+    # display_width <string> -> stdout (chars, not bytes)
+    # Only correction we need is for the UTF-8 ellipsis '…' (3 bytes → 1 cell).
+    display_width() {
+        s="$1"; len=${#s}
+        rest="$s"
+        while [ "${rest#*…}" != "$rest" ]; do
+            len=$((len - 2))
+            rest="${rest#*…}"
+        done
+        printf "%s" "$len"
+    }
+
+    LABEL_W=7
+    HEADER=" installed "
+    HLEN=${#HEADER}
+    HG=$((INNER - HLEN))
+    HL=$((HG / 2))
+    HR=$((HG - HL))
+    TOP_DASHES_L=$(repeat_char "$HL" "─")
+    TOP_DASHES_R=$(repeat_char "$HR" "─")
+    BOTTOM_DASHES=$(repeat_char "$INNER" "─")
+
+    print_row() {
+        label="$1"; value="$2"
+        # available = INNER - 2 (left pad) - LABEL_W - 1 (gap) - 1 (right pad)
+        avail=$((INNER - 2 - LABEL_W - 1 - 1))
+        vlen=$(display_width "$value")
+        if [ "$vlen" -gt "$avail" ]; then
+            keep=$((avail - 1))
+            value="$(printf "%s" "$value" | cut -c1-"$keep")…"
+            vlen=$avail
+        fi
+        pad=$((INNER - 2 - LABEL_W - 1 - vlen - 1))
+        [ "$pad" -lt 0 ] && pad=0
+        spaces=$(repeat_char "$pad" " ")
+        printf "  %s│%s %s%-${LABEL_W}s%s %s%s %s│%s\n" \
+            "$C_GREEN" "$C_RESET" \
+            "$C_DIM" "$label" "$C_RESET" \
+            "$value" "$spaces" \
+            "$C_GREEN" "$C_RESET"
+    }
+
     printf "\n"
-    printf "  %s─── installed ────────────────────────%s\n" "$C_GREEN" "$C_RESET"
-    printf "  %sversion%s  %s\n" "$C_DIM" "$C_RESET" "$PLAIN_VERSION"
-    printf "  %spath%s     %s\n" "$C_DIM" "$C_RESET" "$TARGET"
-    printf "  %ssha256%s   %s…\n" "$C_DIM" "$C_RESET" "${SHORT_SHA:-?}"
-    printf "  %sPATH%s     %s\n" "$C_DIM" "$C_RESET" "$PATH_NOTE"
-    printf "  %s──────────────────────────────────────%s\n\n" "$C_GREEN" "$C_RESET"
+    printf "  %s╭%s%s%s╮%s\n" "$C_GREEN" "$TOP_DASHES_L" "$HEADER" "$TOP_DASHES_R" "$C_RESET"
+    print_row "version" "$PLAIN_VERSION"
+    print_row "path"    "$TARGET"
+    print_row "sha256"  "${SHORT_SHA:-?}…"
+    print_row "PATH"    "$PATH_NOTE"
+    printf "  %s╰%s╯%s\n\n" "$C_GREEN" "$BOTTOM_DASHES" "$C_RESET"
+
     say "  next:"
     say "    ${C_BOLD}juno --help${C_RESET}            top-level command list"
     say "    ${C_BOLD}juno login${C_RESET}             configure OpenAI auth"
