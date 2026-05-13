@@ -173,11 +173,10 @@ done
 
 if [ "$QUIET" -eq 0 ]; then
     printf "\n"
-    printf "  %s╭──── uninstalled ────╮%s\n" "$C_GREEN" "$C_RESET"
+    printf "  %s─── uninstalled ──────────────────────%s\n" "$C_GREEN" "$C_RESET"
     if [ "$PURGE" -eq 0 ] && [ -d "$JUNO_HOME" ]; then
-        printf "  %s│%s  config kept at:      %s│%s\n" "$C_GREEN" "$C_RESET" "$C_GREEN" "$C_RESET"
-        printf "  %s│%s  %-21s%s│%s\n" "$C_GREEN" "$C_RESET" "$JUNO_HOME" "$C_GREEN" "$C_RESET"
+        printf "  %sconfig kept at%s  %s\n" "$C_DIM" "$C_RESET" "$JUNO_HOME"
     fi
-    printf "  %s╰─────────────────────╯%s\n\n" "$C_GREEN" "$C_RESET"
+    printf "  %s──────────────────────────────────────%s\n\n" "$C_GREEN" "$C_RESET"
     note "to reinstall later: curl -sSfL https://raw.githubusercontent.com/o1x3/juno/main/scripts/install.sh | sh"
 fi
