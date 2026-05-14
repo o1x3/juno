@@ -484,19 +484,23 @@ mkdir -p "$JUNO_HOME" 2>/dev/null || true
 } >> "$JUNO_HOME/install.log" 2>/dev/null || true
 
 if [ "$QUIET" -eq 0 ]; then
+    case "$PATH_STATUS" in
+        on-path) PATH_NOTE="on \$PATH" ;;
+        *)
+            if [ "$NO_MODIFY_PATH" -eq 1 ]; then
+                PATH_NOTE="add manually (see above)"
+            else
+                PATH_NOTE="wired via $(basename "$PATH_RC")"
+            fi
+            ;;
+    esac
     printf "\n"
-    printf "  %s╭───────────── installed ─────────────╮%s\n" "$C_GREEN" "$C_RESET"
-    printf "  %s│%s  %-37s%s│%s\n" "$C_GREEN" "$C_RESET" "version: $PLAIN_VERSION" "$C_GREEN" "$C_RESET"
-    printf "  %s│%s  %-37s%s│%s\n" "$C_GREEN" "$C_RESET" "path:    $TARGET" "$C_GREEN" "$C_RESET"
-    printf "  %s│%s  %-37s%s│%s\n" "$C_GREEN" "$C_RESET" "sha256:  ${SHORT_SHA:-?}…" "$C_GREEN" "$C_RESET"
-    if [ "$PATH_STATUS" = "on-path" ]; then
-        printf "  %s│%s  %-37s%s│%s\n" "$C_GREEN" "$C_RESET" "PATH:    on \$PATH" "$C_GREEN" "$C_RESET"
-    elif [ "$NO_MODIFY_PATH" -eq 1 ]; then
-        printf "  %s│%s  %-37s%s│%s\n" "$C_GREEN" "$C_RESET" "PATH:    add manually (see above)" "$C_GREEN" "$C_RESET"
-    else
-        printf "  %s│%s  %-37s%s│%s\n" "$C_GREEN" "$C_RESET" "PATH:    wired via $(basename "$PATH_RC")" "$C_GREEN" "$C_RESET"
-    fi
-    printf "  %s╰─────────────────────────────────────╯%s\n\n" "$C_GREEN" "$C_RESET"
+    printf "  %s─── installed ────────────────────────%s\n" "$C_GREEN" "$C_RESET"
+    printf "  %sversion%s  %s\n" "$C_DIM" "$C_RESET" "$PLAIN_VERSION"
+    printf "  %spath%s     %s\n" "$C_DIM" "$C_RESET" "$TARGET"
+    printf "  %ssha256%s   %s…\n" "$C_DIM" "$C_RESET" "${SHORT_SHA:-?}"
+    printf "  %sPATH%s     %s\n" "$C_DIM" "$C_RESET" "$PATH_NOTE"
+    printf "  %s──────────────────────────────────────%s\n\n" "$C_GREEN" "$C_RESET"
     say "  next:"
     say "    ${C_BOLD}juno --help${C_RESET}            top-level command list"
     say "    ${C_BOLD}juno login${C_RESET}             configure OpenAI auth"

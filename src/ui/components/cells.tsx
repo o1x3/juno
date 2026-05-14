@@ -30,7 +30,6 @@ export type TranscriptCell =
       tools: ToolEntry[];
       collapsed: boolean;
       complete: boolean;
-      spinnerFrame: number;
     }
   | {
       id: string;
@@ -250,31 +249,58 @@ export function ToolGroupCell({
   const argCap = Math.max(60, rowWidth - 18);
 
   if (!cell.complete) {
+    // Derive spinner frame from wall clock so the parent's 80ms re-render tick
+    // is enough to animate it — no per-cell state needed.
+    const frame =
+      glyphs.spinnerFrames[
+        Math.floor(Date.now() / 80) % glyphs.spinnerFrames.length
+      ] ?? '⠋';
     const total = cell.tools.length;
     const activeIdx = cell.tools.findIndex((t) => !t.result);
-    const idx = activeIdx === -1 ? Math.max(0, total - 1) : activeIdx;
-    const active = cell.tools[idx];
-    const spinner =
-      glyphs.spinnerFrames[cell.spinnerFrame % glyphs.spinnerFrames.length] ??
-      '⠋';
-    const elapsed = active ? Date.now() - active.startedAt : 0;
-    const progress = total > 1 ? `[${idx + 1}/${total}] ` : '';
-    const toolName = active?.call.toolName.padEnd(6) ?? '';
-    const args = active ? summarizeArgs(active.call.input, argCap) : '';
+    if (total === 0) {
+      return (
+        <Box
+          flexDirection="column"
+          marginLeft={2}
+          marginTop={1}
+          marginBottom={1}
+        >
+          <Box flexDirection="row" width={rowWidth}>
+            <Text color={colors.tool}>{`${frame}  thinking…`}</Text>
+          </Box>
+        </Box>
+      );
+    }
     return (
       <Box flexDirection="column" marginLeft={2} marginTop={1} marginBottom={1}>
-        <Box flexDirection="row" width={rowWidth}>
-          <Text color={colors.tool}>{`${spinner}  ${progress}`}</Text>
-          <Text color={colors.tool}>{toolName}</Text>
-          <Box flexGrow={1} flexShrink={1} overflowX="hidden">
-            <Text color="gray" wrap="truncate-end">
-              {`   ${args}`}
-            </Text>
-          </Box>
-          <Text color="gray" dimColor>
-            {formatDuration(elapsed)}
-          </Text>
-        </Box>
+        {cell.tools.map((entry, i) => {
+          const settled = Boolean(entry.result);
+          const isActive = i === activeIdx;
+          const nameColor: ThemeColor = !settled
+            ? isActive
+              ? colors.tool
+              : colors.dim
+            : entry.result?.isError
+              ? colors.error
+              : colors.exec;
+          const elapsed = (entry.endedAt ?? Date.now()) - entry.startedAt;
+          const args = summarizeArgs(entry.call.input, argCap);
+          const leader = settled ? '   ' : isActive ? `${frame}  ` : '·  ';
+          return (
+            <Box key={i} flexDirection="row" width={rowWidth}>
+              <Text color={isActive ? colors.tool : colors.dim}>{leader}</Text>
+              <Text color={nameColor}>{entry.call.toolName.padEnd(6)}</Text>
+              <Box flexGrow={1} flexShrink={1} overflowX="hidden">
+                <Text color="gray" wrap="truncate-end">
+                  {`   ${args}`}
+                </Text>
+              </Box>
+              <Text color="gray" dimColor>
+                {formatDuration(elapsed)}
+              </Text>
+            </Box>
+          );
+        })}
       </Box>
     );
   }

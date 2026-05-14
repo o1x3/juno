@@ -142,4 +142,28 @@ describe('renderMarkdown structure', () => {
     expect(json).toContain('│ ');
     expect(json).toContain('quoted');
   });
+
+  test('single-newline-separated lines stay as separate lines (breaks: true)', () => {
+    // Regression: model echoes shell output as plain text without a fence.
+    // With CommonMark soft-breaks these collapse into one paragraph and Ink
+    // word-wraps the whole thing into garbage. `breaks: true` in `lexer()`
+    // turns each \n into a hard <br>; the renderer emits a \n inside Text
+    // which Ink treats as a real line break.
+    const src = [
+      'total 136',
+      'drwxr-xr-x  README.md',
+      '-rw-r--r--  package.json',
+      '-rw-r--r--  tsconfig.json',
+    ].join('\n');
+    const out = renderMarkdown(src, 200);
+    const json = JSON.stringify(out);
+    // Every entry must still be present (proves nothing got reflowed away).
+    expect(json).toContain('total 136');
+    expect(json).toContain('README.md');
+    expect(json).toContain('package.json');
+    expect(json).toContain('tsconfig.json');
+    // And the renderer must have emitted at least one explicit newline
+    // separator between lines.
+    expect(json).toContain('\\n');
+  });
 });

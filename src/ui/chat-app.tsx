@@ -306,7 +306,6 @@ export function ChatApp({
         tools: [],
         collapsed: false,
         complete: false,
-        spinnerFrame: 0,
       },
     ]);
     return id;
@@ -423,7 +422,7 @@ export function ChatApp({
         setCells((current) =>
           current.map((c) =>
             c.id === toolGroupId && c.kind === 'tool-group'
-              ? { ...c, complete: true, collapsed: c.tools.length > 0 }
+              ? { ...c, complete: true, collapsed: false }
               : c,
           ),
         );

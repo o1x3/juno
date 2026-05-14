@@ -430,7 +430,12 @@ function renderTokens(tokens: Token[], ctx: RenderCtx): ReactNode[] {
 
 export function renderMarkdown(text: string, width: number): ReactNode[] {
   const safe = healOpenFence(text);
-  const tokens = lexer(safe);
+  // `breaks: true` makes a single \n a hard line break (vs. a soft break that
+  // CommonMark collapses to a space). The model frequently emits multi-line
+  // plain-text (shell output, listings) without a code fence; without this,
+  // marked joins every line into a single paragraph and Ink word-wraps it,
+  // destroying the original line structure.
+  const tokens = lexer(safe, { gfm: true, breaks: true });
   return renderTokens(tokens as Token[], {
     width: Math.max(20, width - 4),
     indent: 0,
