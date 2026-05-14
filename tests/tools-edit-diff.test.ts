@@ -72,4 +72,24 @@ describe('Edit tool diff payload', () => {
     const after = await readFile(filePath, 'utf8');
     expect(after).toBe('alpha\nBETA\ngamma\n');
   });
+
+  test('Edit rejects paths escaping the workspace', async () => {
+    workspace = await mkdtemp(join(tmpdir(), 'juno-edit-escape-'));
+    const tool = createBuiltinTools(makeContext()).find(
+      (entry) => entry.name === 'Edit',
+    );
+    if (!tool) throw new Error('Edit tool missing');
+
+    const result = await tool.execute(
+      {
+        filePath: '../outside.txt',
+        oldString: 'a',
+        newString: 'b',
+        toolCallId: '1',
+      },
+      makeContext(),
+    );
+    expect(result.isError).toBe(true);
+    expect(String(result.output)).toMatch(/resolves outside workspace root/);
+  });
 });
