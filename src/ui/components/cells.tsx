@@ -115,7 +115,13 @@ function extractDiff(result: ToolResult | undefined): {
   path: string;
 } | null {
   if (!result || result.isError) return null;
-  if (result.toolName !== 'Edit' && result.toolName !== 'Write') return null;
+  if (
+    result.toolName !== 'Edit' &&
+    result.toolName !== 'Write' &&
+    result.toolName !== 'MultiEdit'
+  ) {
+    return null;
+  }
   const output = result.output;
   if (!output || typeof output !== 'object') return null;
   const diff = (output as { diff?: unknown }).diff;
