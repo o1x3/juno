@@ -245,6 +245,129 @@ export function createBuiltinTools(context: ToolContext): ToolSpec[] {
       },
     },
     {
+      name: 'MultiEdit',
+      description:
+        "Apply an ordered list of edits to a single file atomically. All edits succeed or none apply. Each edit's old_string is matched against the in-memory buffer produced by earlier edits in the list. Use replace_all=true on an edit to rewrite every occurrence in the current buffer.",
+      inputSchema: z.object({
+        path: z.string(),
+        edits: z.array(
+          z.object({
+            old_string: z.string(),
+            new_string: z.string(),
+            replace_all: z.boolean().optional(),
+          }),
+        ),
+      }),
+      execute: async (input) => {
+        const toolCallId = String(input.toolCallId ?? crypto.randomUUID());
+        try {
+          const rawEdits = input.edits;
+          if (!Array.isArray(rawEdits) || rawEdits.length === 0) {
+            return fail(
+              toolCallId,
+              'MultiEdit',
+              'edits array must not be empty',
+            );
+          }
+          const filePath = resolveInside(context.cwd, String(input.path));
+          ensureInsideWorkspace(context.cwd, filePath);
+
+          const edits = rawEdits.map((raw, index) => {
+            const obj = (raw ?? {}) as Record<string, unknown>;
+            return {
+              index,
+              oldString:
+                typeof obj.old_string === 'string' ? obj.old_string : '',
+              newString:
+                typeof obj.new_string === 'string' ? obj.new_string : '',
+              replaceAll: Boolean(obj.replace_all),
+            };
+          });
+
+          let originalContent = '';
+          let created = false;
+          try {
+            originalContent = await readFile(filePath, 'utf8');
+          } catch (readError) {
+            if (
+              readError instanceof Error &&
+              (readError as NodeJS.ErrnoException).code === 'ENOENT'
+            ) {
+              if (edits[0]?.oldString === '') {
+                originalContent = '';
+                created = true;
+              } else {
+                return fail(
+                  toolCallId,
+                  'MultiEdit',
+                  `File not found: ${filePath}. Only the first edit may use an empty old_string to create a new file.`,
+                );
+              }
+            } else {
+              throw readError;
+            }
+          }
+
+          let buffer = originalContent;
+          for (const edit of edits) {
+            const { oldString, newString, replaceAll, index } = edit;
+            if (index === 0 && created && oldString === '') {
+              buffer = newString;
+              continue;
+            }
+            if (oldString === '') {
+              return fail(
+                toolCallId,
+                'MultiEdit',
+                `edit[${index}]: old_string must not be empty (only the first edit on a new file may use an empty string)`,
+              );
+            }
+            if (oldString === newString) {
+              return fail(
+                toolCallId,
+                'MultiEdit',
+                `edit[${index}]: old_string and new_string are identical (no-op)`,
+              );
+            }
+            const occurrences = buffer.split(oldString).length - 1;
+            if (occurrences === 0) {
+              return fail(
+                toolCallId,
+                'MultiEdit',
+                `edit[${index}] in ${filePath}: no match for old_string`,
+              );
+            }
+            if (occurrences > 1 && !replaceAll) {
+              return fail(
+                toolCallId,
+                'MultiEdit',
+                `edit[${index}] in ${filePath}: ambiguous match (${occurrences} occurrences); set replace_all to apply to all`,
+              );
+            }
+            buffer = replaceAll
+              ? buffer.replaceAll(oldString, newString)
+              : buffer.replace(oldString, newString);
+          }
+
+          await ensureParent(filePath);
+          await writeFile(filePath, buffer, 'utf8');
+          const diff = computeLineDiff(originalContent, buffer);
+          if (created) diff.created = true;
+          return ok(toolCallId, 'MultiEdit', {
+            path: filePath,
+            diff,
+            created,
+          });
+        } catch (error) {
+          return fail(
+            toolCallId,
+            'MultiEdit',
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+      },
+    },
+    {
       name: 'Bash',
       description:
         'Run a shell command inside the workspace with bounded output and a timeout.',
