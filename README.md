@@ -289,6 +289,10 @@ bun run build:compile # standalone binary at dist/juno
 
 The end-of-turn checklist in [AGENTS.md](AGENTS.md) requires updating `docs/TODO.md`, running tests, running lint/typecheck on material code changes, and rebuilding `dist/juno` if the runtime changed.
 
+### Compiled-binary parity smoke
+
+[`scripts/parity-check.sh`](scripts/parity-check.sh) is a manual smoke that runs the same canned prompt through `bun run src/cli/index.tsx chat` and `dist/juno chat` (against isolated `JUNO_HOME` temp dirs) and diffs the sequence of event `type`s (and tool names) in both JSONL session logs. Run it after `bun run build:compile` when you want to confirm the compiled binary behaves the same as `bun run` — typically before cutting a release. Requires `bun` and `jq` plus working auth (either `OPENAI_API_KEY` in the environment or a stored credential from `juno login`, which the script copies into both temp dirs). This is a structural smoke, not a byte-for-byte check (LLM output is non-deterministic); it catches binary-startup regressions and event-shape drift, not model output variance. Not wired into CI by design.
+
 ## Continuous integration
 
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every push to `main` and every pull request targeting `main`. It uses [`oven-sh/setup-bun`](https://github.com/oven-sh/setup-bun) on `ubuntu-latest` and runs, in order:
