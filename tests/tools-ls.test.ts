@@ -106,7 +106,7 @@ describe('LS tool', () => {
       makeContext(workspace),
     );
     expect(result.isError).toBe(true);
-    expect(String(result.output)).toMatch(/escapes workspace/);
+    expect(String(result.output)).toMatch(/resolves outside workspace root/);
   });
 
   test('rejects absolute paths outside the workspace', async () => {

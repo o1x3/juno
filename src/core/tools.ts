@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import { readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { relative, resolve, sep } from 'node:path';
 
@@ -18,18 +19,17 @@ const GLOB_RESULT_LIMIT = 1000;
 const LS_RESULT_LIMIT = 500;
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', '.claude']);
 
-function ensureInsideWorkspace(root: string, target: string): void {
-  const rootResolved = resolve(root);
-  const targetResolved = resolve(target);
-  if (targetResolved === rootResolved) return;
-  const prefix = rootResolved.endsWith(sep) ? rootResolved : rootResolved + sep;
-  if (!targetResolved.startsWith(prefix)) {
-    throw new Error(`path escapes workspace: ${target}`);
-  }
-}
-
 function relativeToRoot(root: string, target: string): string {
-  const rel = relative(resolve(root), resolve(target));
+  // resolveInside returns a realpath'd target, so we have to realpath the root
+  // too — otherwise /tmp/foo vs /private/tmp/foo on macOS produces a spurious
+  // `..`-prefixed relative path.
+  let rootResolved = resolve(root);
+  try {
+    rootResolved = realpathSync(rootResolved);
+  } catch {
+    // root doesn't exist; fall back to the resolved (non-real) path
+  }
+  const rel = relative(rootResolved, resolve(target));
   return rel === '' ? '.' : rel;
 }
 
@@ -245,6 +245,9 @@ export function createBuiltinTools(context: ToolContext): ToolSpec[] {
       },
     },
     {
+      // Bash deliberately bypasses resolveInside: the command runs arbitrary
+      // shell in `context.cwd`, so a workspace-confinement check would be
+      // theatre. Containment for Bash is the operator's responsibility.
       name: 'Bash',
       description:
         'Run a shell command inside the workspace with bounded output and a timeout.',
@@ -443,7 +446,6 @@ export function createBuiltinTools(context: ToolContext): ToolSpec[] {
           const requestedCwd =
             input.cwd === undefined ? '.' : String(input.cwd);
           const effective = resolveInside(context.cwd, requestedCwd);
-          ensureInsideWorkspace(context.cwd, effective);
 
           const collected: { path: string; mtime: number }[] = [];
           let truncated = false;
@@ -508,7 +510,6 @@ export function createBuiltinTools(context: ToolContext): ToolSpec[] {
           const requestedPath = String(input.path);
           const showHidden = Boolean(input.hidden);
           const effective = resolveInside(context.cwd, requestedPath);
-          ensureInsideWorkspace(context.cwd, effective);
 
           const dirents = await readdir(effective, { withFileTypes: true });
           const entries: {
