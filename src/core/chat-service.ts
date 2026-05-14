@@ -53,6 +53,7 @@ type ChatOptions = {
   prompt: string;
   sessionId?: string;
   mode?: AgentMode;
+  modelClient?: ModelClient;
   onTextDelta?: (delta: string) => void;
   onToolCall?: (call: ToolCall) => void;
   onToolResult?: (result: ToolResult) => void;
@@ -204,7 +205,14 @@ export async function startOrResumeChat(
   }
 
   const configForRouting = { ...config, model: turnModel };
-  const routing = await resolveRouting(configForRouting);
+  const routing: RoutingResolution = options.modelClient
+    ? {
+        runtimeConfig: configForRouting,
+        modelClient: options.modelClient,
+        authMode: 'api-key',
+        activeModel: turnModel,
+      }
+    : await resolveRouting(configForRouting);
 
   const instructions = await loadProjectInstructions(config.cwd);
   const systemPrompt = buildSystemPrompt(instructions, mode);

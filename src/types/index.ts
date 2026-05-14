@@ -87,6 +87,7 @@ export type ToolName =
   | 'Read'
   | 'Write'
   | 'Edit'
+  | 'MultiEdit'
   | 'Bash'
   | 'Grep'
   | 'Glob'

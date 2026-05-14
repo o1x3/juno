@@ -19,6 +19,7 @@ const EXEC_PREAMBLE = [
   '- Prefer minimal, reliable changes. Be surgical in existing code.',
   '- Inspect before asserting; ground claims in evidence.',
   '- Use TodoWrite for multi-step plans (full-list replace; at most one in_progress).',
+  '- Use MultiEdit when making several related changes to the same file in one shot — atomic (all-or-nothing), avoids re-reads.',
   '- For UI/frontend changes, exercise the feature before reporting success.',
 ].join('\n');
 
