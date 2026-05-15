@@ -7,6 +7,17 @@ import { z } from 'zod';
 import { computeLineDiff } from '@/core/diff';
 import { ensureParent, resolveInside, truncateText } from '@/core/fs';
 import { appendSessionEvent } from '@/core/session-store';
+import {
+  fetchWithLimits,
+  formatBody,
+  WebFetchFailure,
+  type WebFetchFormat,
+} from '@/core/web-fetch';
+import {
+  type ExaSearchDeps,
+  searchWithExa,
+  WebSearchFailure,
+} from '@/core/web-search';
 import type {
   ApprovalPreview,
   QuestionOption,
@@ -17,6 +28,19 @@ import type {
   ToolResult,
   ToolSpec,
 } from '@/types';
+
+export type ToolDeps = {
+  fetchImpl?: typeof fetch;
+  summarize?: (input: {
+    prompt: string;
+    content: string;
+    url: string;
+  }) => Promise<string>;
+  exaApiKey?: string;
+  webFetchTimeoutMs?: number;
+  webFetchMaxBytes?: number;
+  mcpTools?: ToolSpec[];
+};
 
 async function requireApproval(
   ctx: ToolContext,
@@ -148,8 +172,11 @@ function fail(
   return { toolCallId, toolName, output: message, isError: true };
 }
 
-export function createBuiltinTools(context: ToolContext): ToolSpec[] {
-  return [
+export function createBuiltinTools(
+  context: ToolContext,
+  deps: ToolDeps = {},
+): ToolSpec[] {
+  const builtins: ToolSpec[] = [
     {
       name: 'Read',
       description:
@@ -962,5 +989,165 @@ export function createBuiltinTools(context: ToolContext): ToolSpec[] {
         }
       },
     },
+    {
+      name: 'WebFetch',
+      description:
+        'Fetch a URL and return its content. HTML is converted to Markdown by default; pass format="text" for plain text or "html" for raw HTML. Optionally pass a `prompt` to summarize the page against that prompt with a small model (saves parent-context tokens). Only http/https; binary content types are refused. 5MB / 30s caps.',
+      inputSchema: z.object({
+        url: z.string().min(1),
+        prompt: z.string().optional(),
+        format: z.enum(['markdown', 'text', 'html']).optional(),
+      }),
+      execute: async (input) => {
+        const toolCallId = String(input.toolCallId ?? crypto.randomUUID());
+        try {
+          const rawUrl = String(input.url ?? '');
+          if (!rawUrl) {
+            return fail(
+              toolCallId,
+              'WebFetch',
+              'url must be a non-empty string',
+            );
+          }
+          const format: WebFetchFormat =
+            input.format === 'text' || input.format === 'html'
+              ? (input.format as WebFetchFormat)
+              : 'markdown';
+          const fetched = await fetchWithLimits(rawUrl, {
+            fetchImpl: deps.fetchImpl,
+            timeoutMs: deps.webFetchTimeoutMs,
+            maxBytes: deps.webFetchMaxBytes,
+          });
+          const { body: shaped, format: appliedFormat } = formatBody(
+            fetched.body,
+            fetched.contentType,
+            format,
+          );
+          let finalBody = shaped;
+          let summarized = false;
+          const prompt =
+            typeof input.prompt === 'string' && input.prompt.trim().length > 0
+              ? input.prompt.trim()
+              : undefined;
+          if (prompt && deps.summarize) {
+            try {
+              finalBody = await deps.summarize({
+                prompt,
+                content: shaped,
+                url: fetched.finalUrl,
+              });
+              summarized = true;
+            } catch (summarizeErr) {
+              // Fall back to the raw shaped body; surface the failure as a note.
+              finalBody = `${shaped}\n\n[juno] summarize failed: ${
+                summarizeErr instanceof Error
+                  ? summarizeErr.message
+                  : String(summarizeErr)
+              }`;
+            }
+          }
+          finalBody = truncateText(finalBody, context.outputLimit);
+          return ok(toolCallId, 'WebFetch', {
+            url: rawUrl,
+            finalUrl: fetched.finalUrl,
+            status: fetched.status,
+            contentType: fetched.contentType,
+            format: appliedFormat,
+            body: finalBody,
+            bytes: fetched.bytes,
+            truncated: fetched.truncated,
+            upgraded: fetched.upgraded,
+            summarized,
+          });
+        } catch (error) {
+          if (error instanceof WebFetchFailure) {
+            return fail(
+              toolCallId,
+              'WebFetch',
+              `${error.kind}: ${error.message}`,
+            );
+          }
+          return fail(
+            toolCallId,
+            'WebFetch',
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+      },
+    },
+    {
+      name: 'WebSearch',
+      description:
+        'Search the web with Exa and return shaped results. Requires EXA_API_KEY. Optional allowed_domains / blocked_domains filter the result set. Returns up to max_results (default 8, max 20) with title, url, snippet.',
+      inputSchema: z.object({
+        query: z.string().min(1),
+        allowed_domains: z.array(z.string()).optional(),
+        blocked_domains: z.array(z.string()).optional(),
+        max_results: z.number().int().min(1).max(20).optional(),
+      }),
+      execute: async (input) => {
+        const toolCallId = String(input.toolCallId ?? crypto.randomUUID());
+        try {
+          const query = String(input.query ?? '').trim();
+          if (!query) {
+            return fail(
+              toolCallId,
+              'WebSearch',
+              'query must be a non-empty string',
+            );
+          }
+          if (!deps.exaApiKey) {
+            return fail(
+              toolCallId,
+              'WebSearch',
+              'EXA_API_KEY is not set. Get a key at https://exa.ai/ and export EXA_API_KEY=…',
+            );
+          }
+          const exaDeps: ExaSearchDeps = {
+            apiKey: deps.exaApiKey,
+            fetchImpl: deps.fetchImpl,
+          };
+          const allowed = Array.isArray(input.allowed_domains)
+            ? (input.allowed_domains as unknown[]).map(String)
+            : undefined;
+          const blocked = Array.isArray(input.blocked_domains)
+            ? (input.blocked_domains as unknown[]).map(String)
+            : undefined;
+          const maxResults =
+            typeof input.max_results === 'number'
+              ? Math.min(20, Math.max(1, Math.trunc(input.max_results)))
+              : 8;
+          const result = await searchWithExa(query, exaDeps, {
+            includeDomains: allowed,
+            excludeDomains: blocked,
+            numResults: maxResults,
+          });
+          return ok(toolCallId, 'WebSearch', {
+            query,
+            provider: 'exa',
+            num_results: result.results.length,
+            results: result.results,
+          });
+        } catch (error) {
+          if (error instanceof WebSearchFailure) {
+            return fail(
+              toolCallId,
+              'WebSearch',
+              `${error.kind}: ${error.message}`,
+            );
+          }
+          return fail(
+            toolCallId,
+            'WebSearch',
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+      },
+    },
   ];
+
+  if (deps.mcpTools && deps.mcpTools.length > 0) {
+    return [...builtins, ...deps.mcpTools];
+  }
+  return builtins;
 }

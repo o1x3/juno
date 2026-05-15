@@ -231,6 +231,8 @@ Resolution lives in [src/core/config.ts](src/core/config.ts).
 | `JUNO_CODEX_BASE_URL` | Override the ChatGPT Codex backend base URL used for OAuth-only credentials. | `https://chatgpt.com/backend-api` |
 | `JUNO_CODEX_MODEL` | Pin the model used on the Codex backend (OAuth-only path). Bypasses the dynamic registry. | discovered cheapest |
 | `JUNO_MODELS_DEV_URL` | Override the models.dev registry URL. Useful for mirrors, air-gapped runs, or test doubles. | `https://models.dev/api.json` |
+| `EXA_API_KEY` | Enables the `WebSearch` tool. Get a key at [exa.ai](https://exa.ai). Without it, `WebSearch` returns a friendly error. | — |
+| `JUNO_MCP_CONFIG` | Explicit path to an MCP config file. When set, `.mcp.json` in cwd and `${JUNO_HOME}/mcp.json` are ignored. | — |
 
 Integer-valued env vars are validated. A non-positive-integer value (e.g. `JUNO_MAX_STEPS=foo`) raises:
 
@@ -394,6 +396,74 @@ When `allowCustom` is left at the default (`true`), an extra **Other** option is
 
 `AskUserQuestion` is included in the plan-mode tool whitelist — it's a read-only meta operation.
 
+## Web tools
+
+Juno ships two read-only web tools (both included in `PLAN_MODE_TOOLS`):
+
+### `WebFetch`
+
+Fetches a URL and returns cleaned content. Schema: `{ url, prompt?, format? }`.
+
+- `format` is `"markdown"` (default), `"text"`, or `"html"`.
+- When `prompt` is supplied, the page is run through a small-model summarizer (`namingModel` on API-key auth, the resolved active model on OAuth-Codex auth) to extract only the parts that answer the prompt. This saves parent-context tokens.
+- HTTP→HTTPS auto-upgrade; binary content-types are refused; 5 MB body cap; 30 s timeout.
+- Output is truncated to `toolOutputLimit`.
+
+### `WebSearch`
+
+Searches the web with [Exa](https://exa.ai). Requires `EXA_API_KEY`. Schema: `{ query, allowed_domains?, blocked_domains?, max_results? }` (max_results clamped to 1-20, default 8).
+
+Without `EXA_API_KEY`, the tool returns a friendly error pointing at the env var.
+
+## MCP servers
+
+Juno can connect to [Model Context Protocol](https://modelcontextprotocol.io) servers and surface their tools alongside the built-ins.
+
+### Config file
+
+Loaded from `${cwd}/.mcp.json` and `${JUNO_HOME}/mcp.json` (cwd wins per-key). Override the search with `JUNO_MCP_CONFIG=<path>`.
+
+```json
+{
+  "mcpServers": {
+    "fs": {
+      "type": "local",
+      "command": "uvx",
+      "args": ["mcp-server-filesystem", "/Users/me/projects"]
+    },
+    "tavily": {
+      "type": "remote",
+      "url": "https://mcp.tavily.com/mcp",
+      "transport": "http",
+      "headers": { "Authorization": "Bearer ${TAVILY_API_KEY}" }
+    },
+    "experimental": {
+      "type": "remote",
+      "url": "https://example.com/sse",
+      "transport": "sse",
+      "enabled": false
+    }
+  }
+}
+```
+
+- `type: "local"` spawns a subprocess via stdio.
+- `type: "remote"` with `transport: "http"` (default) uses StreamableHTTP.
+- `type: "remote"` with `transport: "sse"` uses Server-Sent Events.
+- Set `enabled: false` to keep a server in the file without loading it.
+
+### Tool naming
+
+MCP tools register as `<server>_<tool>` (non-alphanumeric chars replaced with `_`). For example, the `echo` tool from the `stub` server becomes `stub_echo`.
+
+### Approval flow
+
+MCP tool calls go through the same approval flow as `Bash` — a per-tool prompt with three decisions (`approve` / `approve_forever` / `reject`). In **yolo mode** approvals are skipped. The approval cell shows the server, tool name, and pretty-printed arguments.
+
+### Failure isolation
+
+A bad MCP server (unreachable URL, wrong command, schema error) does not block the rest. Failures are logged and that server is dropped from the registry; everything else still loads.
+
 ## Architecture
 
 A short map of what lives where and how a turn flows through the system. All paths are relative to the repository root.
@@ -432,7 +502,7 @@ Each session is an append-only file at `${JUNO_HOME}/sessions/<sessionId>.jsonl`
 | `session_meta` | `timestamp`, `name`, `source` (`auto` \| `manual`). | Written by the background naming pass after the first user turn. `findSessionName` returns the most recent one. |
 | `user_message` | `timestamp`, `message.role: 'user'`, `message.content: string`. | One per user turn. |
 | `assistant_message` | `timestamp`, `message.role: 'assistant'`, `message.content: string`, optional `message.toolCalls: ToolCall[]`. | One per model step that produced assistant text and/or tool calls. |
-| `tool_call` | `timestamp`, `call: { toolCallId, toolName, input }`. | One per tool the model invoked. `toolName` is one of `Read`, `Write`, `Edit`, `Bash`, `Grep`, `Glob`, `LS`, `TodoWrite`. |
+| `tool_call` | `timestamp`, `call: { toolCallId, toolName, input }`. | One per tool the model invoked. `toolName` is one of the built-ins (`Read`, `Write`, `Edit`, `MultiEdit`, `Bash`, `Grep`, `Glob`, `LS`, `TodoWrite`, `AskUserQuestion`, `WebFetch`, `WebSearch`) or an MCP tool (`<server>_<tool>`). |
 | `tool_result` | `timestamp`, `result: { toolCallId, toolName, output, isError? }`. | Pairs one-to-one with `tool_call` by `toolCallId`. `output` is tool-specific; `Edit`/`Write` results carry a `DiffPayload`. |
 | `todo_update` | `timestamp`, `todos: TodoItem[]`. | Written every time the model calls `TodoWrite`. Full-list replace semantics; the most recent event wins. `findLatestPlan` reads this. |
 

@@ -9,6 +9,7 @@ import {
 } from '@/core/approvals';
 import { resolveAuthSummary, startOrResumeChat } from '@/core/chat-service';
 import { type ConfigFile, saveConfig } from '@/core/config';
+import { connectMcpServers, loadMcpConfig, type McpRegistry } from '@/core/mcp';
 import {
   findLatestPlan,
   findSessionName,
@@ -202,6 +203,37 @@ export function ChatApp({
       cancelled = true;
     };
   }, [initialConfig.homeDir]);
+
+  const mcpRegistryRef = useRef<McpRegistry | null>(null);
+  const [mcpTools, setMcpTools] = useState<McpRegistry['tools']>([]);
+  useEffect(() => {
+    let cancelled = false;
+    let registry: McpRegistry | null = null;
+    void (async () => {
+      try {
+        const { servers } = await loadMcpConfig({
+          cwd: initialConfig.cwd,
+          homeDir: initialConfig.homeDir,
+          explicitPath: initialConfig.mcpConfigPath,
+        });
+        if (Object.keys(servers).length === 0) return;
+        registry = await connectMcpServers({ servers });
+        if (cancelled) {
+          await registry.closeAll();
+          return;
+        }
+        mcpRegistryRef.current = registry;
+        setMcpTools(registry.tools);
+      } catch {
+        // ignore — MCP failures must never block the TUI.
+      }
+    })();
+    return () => {
+      cancelled = true;
+      const r = registry ?? mcpRegistryRef.current;
+      if (r) void r.closeAll();
+    };
+  }, [initialConfig.cwd, initialConfig.homeDir, initialConfig.mcpConfigPath]);
 
   const promptPending = Boolean(
     pendingApprovalCellId ?? pendingQuestionCellId ?? pendingConfirmationCellId,
@@ -602,6 +634,7 @@ export function ChatApp({
           prompt: text,
           sessionId: activeSessionId,
           mode,
+          mcpTools,
           requestApproval: mode === 'yolo' ? undefined : requestApproval,
           requestUserAnswer,
           onSessionName: (name) => setSessionName(name),
@@ -741,6 +774,7 @@ export function ChatApp({
       activeSessionId,
       appendCell,
       config,
+      mcpTools,
       mode,
       requestApproval,
       requestUserAnswer,

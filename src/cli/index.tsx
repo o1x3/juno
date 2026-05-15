@@ -20,6 +20,7 @@ import {
   resolveModelsDevUrl,
 } from '@/core/codex-models';
 import { resolveConfig } from '@/core/config';
+import { connectMcpServers, loadMcpConfig } from '@/core/mcp';
 import { listSessions } from '@/core/session-store';
 import {
   performUninstall,
@@ -151,24 +152,52 @@ const chatCommand = defineCommand({
   async run({ args }) {
     const config = resolveConfig({ model: args.model });
     if (args.prompt) {
-      const { sessionId, result } = await startOrResumeChat({
-        config,
-        prompt: String(args.prompt),
-      });
-      process.stdout.write(`${result.assistantText}\n`);
-      process.stdout.write(`session: ${sessionId}\n`);
-      process.stdout.write(`auth: ${result.authMode}\n`);
-      const fallback = result.modelFallback;
-      const fallbackTag = fallback
-        ? ` (was ${fallback.from}${fallback.source === 'static' ? '; offline-fallback' : ''})`
-        : '';
-      process.stdout.write(`model: ${result.activeModel}${fallbackTag}\n`);
+      const mcpRegistry = await initializeMcpRegistry(config);
+      try {
+        const { sessionId, result } = await startOrResumeChat({
+          config,
+          prompt: String(args.prompt),
+          mcpTools: mcpRegistry.tools,
+        });
+        process.stdout.write(`${result.assistantText}\n`);
+        process.stdout.write(`session: ${sessionId}\n`);
+        process.stdout.write(`auth: ${result.authMode}\n`);
+        const fallback = result.modelFallback;
+        const fallbackTag = fallback
+          ? ` (was ${fallback.from}${fallback.source === 'static' ? '; offline-fallback' : ''})`
+          : '';
+        process.stdout.write(`model: ${result.activeModel}${fallbackTag}\n`);
+        for (const warning of mcpRegistry.warnings) {
+          process.stderr.write(`${warning}\n`);
+        }
+      } finally {
+        await mcpRegistry.closeAll();
+      }
       return;
     }
 
     await renderFullscreen(<ChatApp config={config} />);
   },
 });
+
+async function initializeMcpRegistry(config: ReturnType<typeof resolveConfig>) {
+  try {
+    const { servers } = await loadMcpConfig({
+      cwd: config.cwd,
+      homeDir: config.homeDir,
+      explicitPath: config.mcpConfigPath,
+    });
+    if (Object.keys(servers).length === 0) {
+      return { tools: [], warnings: [], closeAll: async () => {} };
+    }
+    return await connectMcpServers({ servers });
+  } catch (error) {
+    process.stderr.write(
+      `[juno] failed to load MCP config: ${error instanceof Error ? error.message : String(error)}\n`,
+    );
+    return { tools: [], warnings: [], closeAll: async () => {} };
+  }
+}
 
 const loginCommand = defineCommand({
   meta: {

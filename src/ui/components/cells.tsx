@@ -637,6 +637,8 @@ function approvalIcon(preview: ApprovalPreview): string {
       return glyphs.approvalMultiEdit;
     case 'bash':
       return glyphs.approvalBash;
+    case 'mcp':
+      return glyphs.approvalBash;
   }
 }
 
@@ -651,6 +653,8 @@ function approvalSubtitle(preview: ApprovalPreview, width: number): string {
       return `MultiEdit ${preview.created ? '(new) ' : ''}${truncatePath(preview.path, limit)}`;
     case 'bash':
       return `Bash`;
+    case 'mcp':
+      return `MCP ${preview.server}/${preview.tool}`;
   }
 }
 
@@ -733,18 +737,36 @@ export function ApprovalCell({
         </Box>
       )}
 
-      {cell.preview.kind !== 'bash' && cell.preview.diff && (
-        <Box marginTop={1}>
-          <DiffBlock
-            payload={cell.preview.diff}
-            path={cell.preview.path}
-            width={cell.expandDiff ? innerWidth : innerWidth - 2}
-            keyPrefix={`approval-${cell.id}`}
-            expand={cell.expandDiff === true}
-            marginLeft={cell.expandDiff ? 2 : 6}
-          />
+      {cell.preview.kind === 'mcp' && (
+        <Box flexDirection="column" marginLeft={3} marginTop={1}>
+          {softWrap(
+            JSON.stringify(cell.preview.args, null, 2),
+            Math.max(20, innerWidth - 6),
+          )
+            .slice(0, 12)
+            .map((line, i) => (
+              <Text key={i} color={isPending ? colors.dim : colors.dim}>
+                {line}
+              </Text>
+            ))}
         </Box>
       )}
+
+      {(cell.preview.kind === 'write' ||
+        cell.preview.kind === 'edit' ||
+        cell.preview.kind === 'multi-edit') &&
+        cell.preview.diff && (
+          <Box marginTop={1}>
+            <DiffBlock
+              payload={cell.preview.diff}
+              path={cell.preview.path}
+              width={cell.expandDiff ? innerWidth : innerWidth - 2}
+              keyPrefix={`approval-${cell.id}`}
+              expand={cell.expandDiff === true}
+              marginLeft={cell.expandDiff ? 2 : 6}
+            />
+          </Box>
+        )}
 
       {isPending && (
         <Box flexDirection="column" marginTop={1}>
