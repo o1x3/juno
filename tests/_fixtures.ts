@@ -27,6 +27,7 @@ export function makeConfig(
     ui: { ...DEFAULT_UI },
     autoUpgrade: false,
     updateCheckEnabled: false,
+    yoloAcknowledged: false,
     ...overrides,
   };
 }

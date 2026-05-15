@@ -49,9 +49,45 @@ export const KEYBINDS: KeybindDef[] = [
   },
   {
     id: 'mode-toggle',
-    description: 'Plan ⇄ exec',
+    description: 'Plan ⇄ exec ⇄ yolo',
     contexts: ['composer'],
     bindings: [{ shift: true, key: 'tab' }],
+  },
+  {
+    id: 'todo-toggle',
+    description: 'Expand/collapse latest todo',
+    contexts: ['transcript', 'global'],
+    bindings: [{ ctrl: true, input: 'p' }],
+  },
+  {
+    id: 'approval-prev',
+    description: 'Previous approval option',
+    contexts: ['global'],
+    bindings: [{ key: 'up' }, { input: 'k' }],
+  },
+  {
+    id: 'approval-next',
+    description: 'Next approval option',
+    contexts: ['global'],
+    bindings: [{ key: 'down' }, { input: 'j' }],
+  },
+  {
+    id: 'approval-confirm',
+    description: 'Confirm approval',
+    contexts: ['global'],
+    bindings: [{ key: 'enter' }],
+  },
+  {
+    id: 'approval-reject',
+    description: 'Reject approval',
+    contexts: ['global'],
+    bindings: [{ key: 'escape' }],
+  },
+  {
+    id: 'question-toggle-focus',
+    description: 'Switch options ⇄ notes',
+    contexts: ['global'],
+    bindings: [{ key: 'tab' }],
   },
   {
     id: 'pane-toggle',

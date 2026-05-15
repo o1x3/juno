@@ -14,7 +14,7 @@ type EditorSnapshot = {
   cursor: { line: number; col: number };
 };
 
-export type ComposerVisualMode = 'exec' | 'plan' | 'bash' | 'palette';
+export type ComposerVisualMode = 'exec' | 'plan' | 'bash' | 'palette' | 'yolo';
 
 export type ComposerProps = {
   value: string;
@@ -56,6 +56,8 @@ function modePrefix(mode: ComposerVisualMode): {
       return { glyph: '$', color: colors.bash };
     case 'palette':
       return { glyph: '/', color: colors.accent };
+    case 'yolo':
+      return { glyph: '!', color: colors.yolo };
     default:
       return { glyph: '›', color: colors.accent };
   }

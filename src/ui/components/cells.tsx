@@ -2,7 +2,15 @@ import { Box, Text } from 'ink';
 import type { ReactElement } from 'react';
 
 import type { DiffHunk, DiffLine, DiffPayload } from '@/core/diff';
-import type { TodoItem, ToolCall, ToolResult } from '@/types';
+import type {
+  ApprovalPreview,
+  QuestionOption,
+  QuestionResponse,
+  TodoItem,
+  ToolCall,
+  ToolName,
+  ToolResult,
+} from '@/types';
 import { collapseHunkLines } from '@/ui/diff-render';
 import { formatDuration, softWrap, truncatePath } from '@/ui/format';
 import { renderMarkdown } from '@/ui/markdown';
@@ -56,6 +64,43 @@ export type TranscriptCell =
       id: string;
       kind: 'todo';
       todos: TodoItem[];
+      collapsed?: boolean;
+    }
+  | {
+      id: string;
+      kind: 'approval';
+      toolName: ToolName;
+      preview: ApprovalPreview;
+      status: 'pending' | 'approved' | 'approved_forever' | 'rejected';
+      selectedIndex: number;
+      feedback: string;
+      focusMode: 'options' | 'feedback';
+      rejectionReason?: string;
+      expandDiff?: boolean;
+    }
+  | {
+      id: string;
+      kind: 'question';
+      questionId: string;
+      question: string;
+      header?: string;
+      options: QuestionOption[];
+      multiSelect: boolean;
+      status: 'pending' | 'answered' | 'dismissed';
+      selectedIndices: number[];
+      focusMode: 'options' | 'notes';
+      notes: string;
+      cursor: number;
+      answer?: QuestionResponse;
+      isSecret?: boolean;
+      progress?: { current: number; total: number };
+    }
+  | {
+      id: string;
+      kind: 'confirmation';
+      title: string;
+      body: string;
+      status: 'pending' | 'confirmed' | 'cancelled';
     };
 
 function gutter(glyph: string, color: ThemeColor) {
@@ -161,6 +206,7 @@ function renderDiffHunk(
   hunk: DiffHunk,
   width: number,
   keyPrefix: string,
+  expand = false,
 ): ReactElement {
   if (hunk.kind === 'truncated') {
     return (
@@ -172,7 +218,9 @@ function renderDiffHunk(
     );
   }
   const header = `@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`;
-  const collapsed = collapseHunkLines(hunk.lines);
+  const collapsed = expand
+    ? ({ collapsed: false, lines: hunk.lines } as const)
+    : collapseHunkLines(hunk.lines);
   return (
     <Box key={keyPrefix} flexDirection="column">
       <Text color={colors.dim} dimColor>
@@ -184,7 +232,7 @@ function renderDiffHunk(
               renderDiffLine(line, width, `${keyPrefix}-h-${i}`),
             ),
             <Text key={`${keyPrefix}-hidden`} color={colors.dim} dimColor>
-              {`  … ${collapsed.hiddenCount} lines hidden`}
+              {`  … ${collapsed.hiddenCount} lines hidden (⌃F expand)`}
             </Text>,
             ...collapsed.tail.flatMap((line, i) =>
               renderDiffLine(line, width, `${keyPrefix}-t-${i}`),
@@ -202,23 +250,27 @@ function DiffBlock({
   path,
   width,
   keyPrefix,
+  expand = false,
+  marginLeft = 6,
 }: {
   payload: DiffPayload;
   path: string;
   width: number;
   keyPrefix: string;
+  expand?: boolean;
+  marginLeft?: number;
 }) {
   if (payload.identical || payload.hunks.length === 0) return null;
   const headerLabel = payload.created
     ? `${truncatePath(path, Math.max(20, width - 16))}  (new file)`
     : truncatePath(path, Math.max(20, width - 4));
   return (
-    <Box flexDirection="column" marginLeft={6}>
+    <Box flexDirection="column" marginLeft={marginLeft}>
       <Text color={colors.dim} dimColor>
         {headerLabel}
       </Text>
       {payload.hunks.map((hunk, i) =>
-        renderDiffHunk(hunk, width - 6, `${keyPrefix}-${i}`),
+        renderDiffHunk(hunk, width - marginLeft, `${keyPrefix}-${i}`, expand),
       )}
     </Box>
   );
@@ -473,6 +525,28 @@ export function PlanNoteCell({
   );
 }
 
+export function summarizePlanCounts(todos: TodoItem[]): {
+  pending: number;
+  in_progress: number;
+  completed: number;
+} {
+  let pending = 0;
+  let inProgress = 0;
+  let completed = 0;
+  for (const t of todos) {
+    if (t.status === 'completed') completed += 1;
+    else if (t.status === 'in_progress') inProgress += 1;
+    else pending += 1;
+  }
+  return { pending, in_progress: inProgress, completed };
+}
+
+function todoChip(todos: TodoItem[]): string {
+  if (todos.length === 0) return `${glyphs.plan} plan · (cleared)`;
+  const { in_progress, completed } = summarizePlanCounts(todos);
+  return `${glyphs.plan} plan · ${completed}/${todos.length} done · ${in_progress} active   (⌃P expand)`;
+}
+
 export function TodoCell({
   cell,
   width,
@@ -480,11 +554,26 @@ export function TodoCell({
   cell: Extract<TranscriptCell, { kind: 'todo' }>;
   width: number;
 }) {
+  if (cell.collapsed) {
+    return (
+      <Box flexDirection="column" marginLeft={2} marginBottom={1}>
+        <Text color={colors.plan} dimColor>
+          {todoChip(cell.todos)}
+        </Text>
+      </Box>
+    );
+  }
+
   const innerWidth = Math.max(20, width - 6);
+  const counts = summarizePlanCounts(cell.todos);
+  const headerSuffix =
+    cell.todos.length === 0
+      ? ''
+      : `  ·  ${counts.completed}/${cell.todos.length} done · ${counts.in_progress} active`;
   return (
     <Box flexDirection="column" marginLeft={2} marginBottom={1}>
       <Text color={colors.plan}>
-        {`${glyphs.plan} plan · ${cell.todos.length} item${cell.todos.length === 1 ? '' : 's'}`}
+        {`${glyphs.plan} plan · ${cell.todos.length} item${cell.todos.length === 1 ? '' : 's'}${headerSuffix}`}
       </Text>
       {cell.todos.length === 0 ? (
         <Text color={colors.dim} dimColor>
@@ -494,11 +583,17 @@ export function TodoCell({
         cell.todos.map((item) => {
           const glyph =
             item.status === 'completed'
-              ? '[x]'
+              ? glyphs.optionDone
               : item.status === 'in_progress'
-                ? '[~]'
-                : '[ ]';
-          const color: ThemeColor =
+                ? glyphs.optionInProgress
+                : glyphs.optionPending;
+          const glyphColor: ThemeColor =
+            item.status === 'completed'
+              ? colors.exec
+              : item.status === 'in_progress'
+                ? colors.warn
+                : colors.dim;
+          const textColor: ThemeColor =
             item.status === 'in_progress'
               ? colors.accent
               : item.status === 'completed'
@@ -511,12 +606,12 @@ export function TodoCell({
           const lines = softWrap(text, innerWidth);
           return (
             <Box key={item.id} flexDirection="row">
-              <Text color={color}>{`  ${glyph} `}</Text>
+              <Text color={glyphColor}>{`  ${glyph} `}</Text>
               <Box flexDirection="column">
                 {lines.map((line, i) => (
                   <Text
                     key={i}
-                    color={color}
+                    color={textColor}
                     dimColor={item.status === 'completed'}
                     strikethrough={item.status === 'completed'}
                   >
@@ -527,6 +622,413 @@ export function TodoCell({
             </Box>
           );
         })
+      )}
+    </Box>
+  );
+}
+
+function approvalIcon(preview: ApprovalPreview): string {
+  switch (preview.kind) {
+    case 'write':
+      return glyphs.approvalWrite;
+    case 'edit':
+      return glyphs.approvalEdit;
+    case 'multi-edit':
+      return glyphs.approvalMultiEdit;
+    case 'bash':
+      return glyphs.approvalBash;
+  }
+}
+
+function approvalSubtitle(preview: ApprovalPreview, width: number): string {
+  const limit = Math.max(20, width - 16);
+  switch (preview.kind) {
+    case 'write':
+      return `${preview.created ? 'Write (new) ' : 'Write '}${truncatePath(preview.path, limit)}`;
+    case 'edit':
+      return `Edit ${truncatePath(preview.path, limit)}`;
+    case 'multi-edit':
+      return `MultiEdit ${preview.created ? '(new) ' : ''}${truncatePath(preview.path, limit)}`;
+    case 'bash':
+      return `Bash`;
+  }
+}
+
+const APPROVAL_OPTIONS: { label: string; key: string; hint: string }[] = [
+  { label: 'Approve', key: 'y', hint: 'just this once' },
+  { label: 'Approve always', key: 'a', hint: 'remember for this project' },
+  { label: 'Reject', key: 'n', hint: 'block this call' },
+];
+
+function approvalStatusLine(
+  status: Extract<TranscriptCell, { kind: 'approval' }>['status'],
+): { text: string; color: ThemeColor } {
+  switch (status) {
+    case 'pending':
+      return { text: 'awaiting decision…', color: colors.warn };
+    case 'approved':
+      return { text: 'approved', color: colors.exec };
+    case 'approved_forever':
+      return {
+        text: 'approved (remembered for this project)',
+        color: colors.exec,
+      };
+    case 'rejected':
+      return { text: 'rejected', color: colors.error };
+  }
+}
+
+export function ApprovalCell({
+  cell,
+  width,
+}: {
+  cell: Extract<TranscriptCell, { kind: 'approval' }>;
+  width: number;
+}) {
+  const innerWidth = Math.max(20, width - 4);
+  const icon = approvalIcon(cell.preview);
+  const subtitle = approvalSubtitle(cell.preview, innerWidth);
+  const status = approvalStatusLine(cell.status);
+  const isPending = cell.status === 'pending';
+
+  return (
+    <Box
+      flexDirection="column"
+      marginLeft={2}
+      marginTop={1}
+      marginBottom={1}
+      borderStyle="round"
+      borderColor={isPending ? colors.warn : colors.dim}
+      paddingX={1}
+    >
+      <Box flexDirection="row">
+        <Text color={colors.warn} bold>
+          {`${glyphs.warning}  Permission required`}
+        </Text>
+        <Box flexGrow={1} />
+        <Text color={status.color} dimColor={!isPending}>
+          {status.text}
+        </Text>
+      </Box>
+      <Box flexDirection="row" marginTop={1}>
+        <Text color={colors.dim}>{`${icon}  `}</Text>
+        <Text color={isPending ? 'white' : colors.dim} dimColor={!isPending}>
+          {subtitle}
+        </Text>
+      </Box>
+
+      {cell.preview.kind === 'bash' && (
+        <Box flexDirection="column" marginLeft={3} marginTop={1}>
+          {softWrap(cell.preview.command, Math.max(20, innerWidth - 6)).map(
+            (line, i) => (
+              <Text
+                key={i}
+                color={isPending ? colors.bash : colors.dim}
+                dimColor={!isPending}
+              >
+                {line}
+              </Text>
+            ),
+          )}
+        </Box>
+      )}
+
+      {cell.preview.kind !== 'bash' && cell.preview.diff && (
+        <Box marginTop={1}>
+          <DiffBlock
+            payload={cell.preview.diff}
+            path={cell.preview.path}
+            width={cell.expandDiff ? innerWidth : innerWidth - 2}
+            keyPrefix={`approval-${cell.id}`}
+            expand={cell.expandDiff === true}
+            marginLeft={cell.expandDiff ? 2 : 6}
+          />
+        </Box>
+      )}
+
+      {isPending && (
+        <Box flexDirection="column" marginTop={1}>
+          {APPROVAL_OPTIONS.map((opt, idx) => {
+            const focused =
+              cell.focusMode === 'options' && idx === cell.selectedIndex;
+            return (
+              <Box key={opt.key} flexDirection="row">
+                <Text color={focused ? colors.accent : colors.dim}>
+                  {focused ? `${glyphs.selector} ` : '  '}
+                </Text>
+                <Text color={focused ? colors.accent : 'white'} bold={focused}>
+                  {`${idx + 1}. ${opt.label}`}
+                </Text>
+                <Box flexGrow={1} />
+                <Text color={colors.dim} dimColor>
+                  {`(${opt.key})  ${opt.hint}`}
+                </Text>
+              </Box>
+            );
+          })}
+          <Box flexDirection="column" marginTop={1}>
+            <Text color={colors.dim} dimColor>
+              {cell.focusMode === 'feedback'
+                ? 'reason (Enter to submit decision · Tab back to options · Esc reject):'
+                : cell.feedback.length > 0
+                  ? `reason: ${cell.feedback}   (Tab to edit)`
+                  : 'optional reason for rejection (Tab to focus)'}
+            </Text>
+            {cell.focusMode === 'feedback' && (
+              <Box flexDirection="row">
+                <Text color={colors.accent}>{`${glyphs.selector} `}</Text>
+                <Text color="white">
+                  {cell.feedback.length > 0 ? cell.feedback : ' '}
+                  {glyphs.cursor}
+                </Text>
+              </Box>
+            )}
+          </Box>
+          <Box marginTop={1}>
+            <Text color={colors.dim} dimColor>
+              {cell.focusMode === 'feedback'
+                ? 'Type a reason · Enter submit · Tab back · Esc reject without reason'
+                : `↑↓ select · Tab reason · ⌃F ${cell.expandDiff ? 'collapse' : 'expand'} diff · Enter confirm · Esc reject`}
+            </Text>
+          </Box>
+        </Box>
+      )}
+
+      {!isPending && cell.rejectionReason && (
+        <Box flexDirection="column" marginTop={1}>
+          <Text color={colors.dim} dimColor>
+            {`reason: ${cell.rejectionReason}`}
+          </Text>
+        </Box>
+      )}
+    </Box>
+  );
+}
+
+export function QuestionCell({
+  cell,
+  width,
+}: {
+  cell: Extract<TranscriptCell, { kind: 'question' }>;
+  width: number;
+}) {
+  const innerWidth = Math.max(20, width - 4);
+  const isPending = cell.status === 'pending';
+  const selectedSet = new Set(cell.selectedIndices);
+  const ruleColor = isPending ? colors.accent : colors.dim;
+  const statusLabel =
+    cell.status === 'answered'
+      ? 'answered'
+      : cell.status === 'dismissed'
+        ? 'dismissed'
+        : 'awaiting answer…';
+  const statusColor: ThemeColor =
+    cell.status === 'answered'
+      ? colors.exec
+      : cell.status === 'dismissed'
+        ? colors.error
+        : colors.warn;
+
+  return (
+    <Box
+      flexDirection="column"
+      marginLeft={2}
+      marginTop={1}
+      marginBottom={1}
+      borderStyle="round"
+      borderColor={ruleColor}
+      paddingX={1}
+    >
+      <Box flexDirection="row">
+        <Text color={colors.accent} bold>
+          {`${glyphs.question}  ${cell.header ?? 'Question'}`}
+        </Text>
+        {cell.progress && (
+          <Text color={colors.dim} dimColor>
+            {`   Question ${cell.progress.current} of ${cell.progress.total}`}
+          </Text>
+        )}
+        {cell.isSecret && (
+          <Text color={colors.warn} dimColor>
+            {'   (secret)'}
+          </Text>
+        )}
+        <Box flexGrow={1} />
+        <Text color={statusColor} dimColor={!isPending}>
+          {statusLabel}
+        </Text>
+      </Box>
+
+      <Box flexDirection="column" marginTop={1}>
+        {softWrap(cell.question, innerWidth).map((line, i) => (
+          <Text
+            key={i}
+            color={isPending ? 'white' : colors.dim}
+            dimColor={!isPending}
+          >
+            {line}
+          </Text>
+        ))}
+      </Box>
+
+      <Box flexDirection="column" marginTop={1}>
+        {cell.options.map((opt, idx) => {
+          const focused =
+            isPending && cell.focusMode === 'options' && idx === cell.cursor;
+          const checked = selectedSet.has(idx);
+          const mark = cell.multiSelect
+            ? checked
+              ? '[x]'
+              : '[ ]'
+            : checked
+              ? `${glyphs.optionDone}  `
+              : '   ';
+          const color = focused
+            ? colors.accent
+            : checked
+              ? colors.exec
+              : 'white';
+          return (
+            <Box key={idx} flexDirection="column">
+              <Box flexDirection="row">
+                <Text color={focused ? colors.accent : colors.dim}>
+                  {focused ? `${glyphs.selector} ` : '  '}
+                </Text>
+                <Text color={color} bold={focused}>
+                  {`${idx + 1}. ${mark} ${opt.label}`}
+                </Text>
+              </Box>
+              {opt.description && (
+                <Box flexDirection="column" marginLeft={6}>
+                  {softWrap(opt.description, Math.max(20, innerWidth - 6)).map(
+                    (line, i) => (
+                      <Text key={i} color={colors.dim} dimColor>
+                        {line}
+                      </Text>
+                    ),
+                  )}
+                </Box>
+              )}
+            </Box>
+          );
+        })}
+      </Box>
+
+      {isPending && cell.focusMode === 'notes' && (
+        <Box flexDirection="column" marginTop={1}>
+          <Text color={colors.dim} dimColor>
+            {cell.isSecret
+              ? 'secret (input hidden — Enter to submit, Tab back to options):'
+              : 'notes (Enter to submit, Tab back to options):'}
+          </Text>
+          <Box flexDirection="row">
+            <Text color={colors.accent}>{`${glyphs.selector} `}</Text>
+            <Text color="white">
+              {cell.notes.length > 0
+                ? cell.isSecret
+                  ? '*'.repeat(cell.notes.length)
+                  : cell.notes
+                : ' '}
+              {isPending && cell.focusMode === 'notes' ? glyphs.cursor : ''}
+            </Text>
+          </Box>
+        </Box>
+      )}
+
+      {cell.status === 'answered' && cell.answer?.kind === 'answered' && (
+        <Box flexDirection="column" marginTop={1}>
+          <Text color={colors.exec}>
+            {`${glyphs.optionDone}  ${cell.answer.selected.join(', ')}`}
+            {cell.answer.custom
+              ? cell.isSecret
+                ? ` — ${'*'.repeat(cell.answer.custom.length)}`
+                : ` — ${cell.answer.custom}`
+              : ''}
+          </Text>
+        </Box>
+      )}
+
+      {isPending && (
+        <Box marginTop={1}>
+          <Text color={colors.dim} dimColor>
+            {cell.multiSelect
+              ? '1-4 toggle · ↑↓ navigate · Tab notes · Enter submit · Esc cancel'
+              : '1-4 select · ↑↓ navigate · Tab notes · Enter submit · Esc cancel'}
+          </Text>
+        </Box>
+      )}
+    </Box>
+  );
+}
+
+export function ConfirmationCell({
+  cell,
+  width,
+}: {
+  cell: Extract<TranscriptCell, { kind: 'confirmation' }>;
+  width: number;
+}) {
+  const innerWidth = Math.max(20, width - 6);
+  const isPending = cell.status === 'pending';
+  const statusLabel =
+    cell.status === 'confirmed'
+      ? 'confirmed'
+      : cell.status === 'cancelled'
+        ? 'cancelled'
+        : 'awaiting decision…';
+  const statusColor: ThemeColor =
+    cell.status === 'confirmed'
+      ? colors.yolo
+      : cell.status === 'cancelled'
+        ? colors.dim
+        : colors.warn;
+  return (
+    <Box
+      flexDirection="column"
+      marginLeft={2}
+      marginTop={1}
+      marginBottom={1}
+      borderStyle="round"
+      borderColor={isPending ? colors.yolo : colors.dim}
+      paddingX={1}
+    >
+      <Box flexDirection="row">
+        <Text color={colors.yolo} bold>
+          {`${glyphs.error}  ${cell.title}`}
+        </Text>
+        <Box flexGrow={1} />
+        <Text color={statusColor} dimColor={!isPending}>
+          {statusLabel}
+        </Text>
+      </Box>
+      <Box flexDirection="column" marginTop={1}>
+        {cell.body.split('\n').flatMap((line, i) =>
+          softWrap(line, innerWidth).map((seg, j) => (
+            <Text
+              key={`${i}-${j}`}
+              color={isPending ? 'white' : colors.dim}
+              dimColor={!isPending}
+            >
+              {seg}
+            </Text>
+          )),
+        )}
+      </Box>
+      {isPending && (
+        <Box flexDirection="column" marginTop={1}>
+          <Text color="white">
+            <Text color={colors.yolo} bold>
+              y
+            </Text>
+            {'   confirm and enter yolo'}
+          </Text>
+          <Text color="white">
+            <Text color={colors.dim} bold>
+              n
+            </Text>
+            {'   cancel and stay in exec'}
+          </Text>
+        </Box>
       )}
     </Box>
   );
@@ -548,5 +1050,11 @@ export function renderCell(cell: TranscriptCell, width: number) {
       return <PlanNoteCell cell={cell} width={width} />;
     case 'todo':
       return <TodoCell cell={cell} width={width} />;
+    case 'approval':
+      return <ApprovalCell cell={cell} width={width} />;
+    case 'question':
+      return <QuestionCell cell={cell} width={width} />;
+    case 'confirmation':
+      return <ConfirmationCell cell={cell} width={width} />;
   }
 }

@@ -62,6 +62,7 @@ function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
     ui: { ...DEFAULT_UI },
     autoUpgrade: false,
     updateCheckEnabled: false,
+    yoloAcknowledged: false,
     ...overrides,
   };
 }

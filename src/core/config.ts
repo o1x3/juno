@@ -38,6 +38,7 @@ export const configFileSchema = z
     codexModel: z.string().trim().min(1).optional(),
     autoUpgrade: z.boolean().optional(),
     updateCheckEnabled: z.boolean().optional(),
+    yoloAcknowledged: z.boolean().optional(),
     ui: uiSchema.optional(),
   })
   .strict();
@@ -236,6 +237,7 @@ export function resolveConfig(overrides: ConfigOverrides = {}): AgentConfig {
     disableUpdateCheck === true
       ? false
       : (fileConfig.updateCheckEnabled ?? true);
+  const yoloAcknowledged = fileConfig.yoloAcknowledged ?? false;
 
   return {
     cwd,
@@ -260,6 +262,7 @@ export function resolveConfig(overrides: ConfigOverrides = {}): AgentConfig {
     ui: resolveUi(fileConfig.ui),
     autoUpgrade,
     updateCheckEnabled,
+    yoloAcknowledged,
   };
 }
 

@@ -252,6 +252,10 @@ The schema is **strict** (unknown keys are rejected). Supported keys:
 | `bashTimeoutMs` | positive int | Same as `JUNO_BASH_TIMEOUT_MS`. |
 | `codexBackendUrl` | string | Same as `JUNO_CODEX_BASE_URL`. |
 | `codexModel` | string | Same as `JUNO_CODEX_MODEL`. |
+| `yoloAcknowledged` | bool | Set automatically when you confirm the yolo-mode prompt for the first time. Manually setting this to `true` skips the gate on every fresh session; setting `false` (or omitting it) restores the warning. |
+| `planModel` / `execModel` / `namingModel` | string | Per-mode model overrides. |
+| `autoName` | bool | Auto-generate a session name from the first user message. Default `true`. |
+| `autoUpgrade` / `updateCheckEnabled` | bool | Self-update behavior. See "Upgrading" above. |
 
 Example `~/.juno/config.json`:
 
@@ -278,11 +282,117 @@ Everything is under `${JUNO_HOME}` (default `~/.juno`):
 ~/.juno/
 ├── auth.json         # credential record, mode 0o600
 ├── config.json       # optional
+├── approvals.json    # per-project approval allowlist (see "Modes and approvals")
 └── sessions/
     └── 2026-05-05T13-37-00.000Z.jsonl
 ```
 
 Session file names are derived from the creation timestamp (colons replaced with dashes). Each line is one JSON event — see [Session schema (JSONL)](#session-schema-jsonl) below for the full event list and fields.
+
+## Modes and approvals
+
+Juno's chat UI runs in one of three modes. Shift+Tab cycles through them: **plan → exec → yolo → plan**. The current mode is shown in the header chip and the status line below the composer.
+
+| Mode | Color | What the agent can do | Approval prompts? |
+| --- | --- | --- | --- |
+| `plan` | magenta `◆` | Read-only tools (`Read`, `Grep`, `Glob`, `LS`, `TodoWrite`, `AskUserQuestion`). System prompt forbids edits. | n/a |
+| `exec` | green `●` | All tools. Mutating calls (`Write`, `Edit`, `MultiEdit`, `Bash`) pause for approval. | Yes |
+| `yolo` | bright red `!` | All tools. Approvals are skipped. | **No** |
+
+### First-time yolo gate
+
+The first time you enter `yolo` in any session, a bordered confirmation cell appears explaining the trade-off. Pressing `y` enters yolo and persists `yoloAcknowledged: true` to `~/.juno/config.json`; `n` (or Esc) cancels and stays in `exec`. Subsequent entries skip the gate and append a one-line `⚠ yolo · approvals off` banner.
+
+### Approval cell
+
+When a mutating tool fires in `exec` mode, an approval cell renders inline above the running tool:
+
+```
+┌─ △ Permission required ─────────────────────── awaiting decision ─┐
+│  → Write src/foo.ts                                               │
+│                                                                   │
+│  src/foo.ts (new file)                                            │
+│  @@ -0,0 +1,3 @@                                                  │
+│  + first line                                                     │
+│  + second line                                                    │
+│                                                                   │
+│  › 1. Approve            (y)  just this once                      │
+│    2. Approve always     (a)  remember for this project           │
+│    3. Reject             (n)  block this call                     │
+│                                                                   │
+│  optional reason for rejection (Tab to focus)                     │
+│                                                                   │
+│  ↑↓ select · Tab reason · ⌃F expand diff · Enter confirm · Esc    │
+└───────────────────────────────────────────────────────────────────┘
+```
+
+Keystrokes:
+- `y` / `1` — approve once (session-scoped cache).
+- `a` / `2` — approve forever for this project. Persists to `~/.juno/approvals.json`.
+- `n` / `3` / `Esc` — reject. If you have typed a reason in the feedback box, the rejection includes it (the model sees `user rejected Write: <your reason>`).
+- `Tab` — toggle focus between the option list and the optional feedback textarea.
+- `↑/↓` (or `k/j`) — cycle options.
+- `Enter` — confirm the selected option.
+- `⌃F` — toggle expanded / collapsed diff view. Collapsed mode hides the middle of large hunks; expanded shows every line.
+
+Once a tool is approved (either for the session or forever), Juno short-circuits future approval checks for that tool name and no prompt appears.
+
+### Persistent allowlist
+
+`~/.juno/approvals.json` is keyed by **absolute project path** (your `cwd` when Juno starts):
+
+```json
+{
+  "/Users/you/code/work/myproj": ["Write", "Edit"],
+  "/Users/you/code/work/other-proj": ["Bash"]
+}
+```
+
+Loaded on Ink mount, written on every `approve_forever`. Atomic temp-file + rename. Malformed or missing files load as `{}`. Edit it by hand to revoke a tool's standing approval.
+
+### Disabling approvals globally
+
+Cycle to `yolo` with Shift+Tab. Approvals stay off for the rest of that session (Shift+Tab back out to re-enable). There is intentionally no env-flag override — yolo is meant to be a deliberate toggle, not a default.
+
+### AskUserQuestion
+
+The model can pause and ask you a structured question via the `AskUserQuestion` tool. Two shapes are accepted by the schema:
+
+```json
+// Single question
+{
+  "question": "Which framework do you prefer?",
+  "header": "Framework",
+  "options": [
+    { "label": "React", "description": "component model" },
+    { "label": "Vue",   "description": "progressive framework" }
+  ],
+  "multiSelect": false,
+  "allowCustom": true,
+  "isSecret": false
+}
+```
+
+```json
+// Multi-question batch (1-3 questions)
+{
+  "questions": [
+    { "question": "Framework?", "options": [...] },
+    { "question": "Strict mode?", "options": [...] }
+  ]
+}
+```
+
+The rendered cell shows numbered options with descriptions. Keystrokes:
+- `1`-`4` — select an option (single-select picks immediately; multi-select toggles).
+- `↑/↓` (or `k/j`) — move the cursor.
+- `Tab` — focus the inline notes composer for a free-text answer.
+- `Enter` — submit.
+- `Esc` — dismiss (the tool returns `isError: 'user dismissed question'`).
+
+When `allowCustom` is left at the default (`true`), an extra **Other** option is auto-injected; selecting it switches focus into the notes composer. When `isSecret: true`, your typing is masked with `*` in the cell and in the answered display.
+
+`AskUserQuestion` is included in the plan-mode tool whitelist — it's a read-only meta operation.
 
 ## Architecture
 
@@ -307,7 +417,7 @@ A short map of what lives where and how a turn flows through the system. All pat
    - **`api-key`** — env or stored API key → `createAiSdkModelClient` (Vercel AI SDK over `@ai-sdk/openai`).
    - **`oauth-api-key`** — stored OAuth that successfully exchanged for an API key at login → same AI-SDK client.
    - **`oauth-codex`** — OAuth without an API key → [`createCodexResponsesClient`](src/core/codex-responses-client.ts) talking to `https://chatgpt.com/backend-api/codex/responses` with `Bearer <access_token>` + `chatgpt-account-id`. The configured model is rewritten to a known-safe ChatGPT-account model when needed.
-4. [`buildSystemPrompt`](src/core/prompt.ts) merges the project-instruction walk (`CLAUDE.md`/`AGENTS.md` from cwd up to git root) with the mode preamble (`exec` or `plan`). In plan mode the tool whitelist is also filtered to `{Read, Grep, Glob, LS, TodoWrite}` (`PLAN_MODE_TOOLS` in `chat-service.ts`).
+4. [`buildSystemPrompt`](src/core/prompt.ts) merges the project-instruction walk (`CLAUDE.md`/`AGENTS.md` from cwd up to git root) with the mode preamble (`exec`, `plan`, or `yolo`). In plan mode the tool whitelist is also filtered to `{Read, Grep, Glob, LS, TodoWrite, AskUserQuestion}` (`PLAN_MODE_TOOLS` in `chat-service.ts`). Yolo mode runs with the same prompt and tool set as exec but with `requestApproval` omitted so mutating tools never pause.
 5. [`runAgentTurn`](src/core/agent-loop.ts) calls `modelClient.runStep(...)` in a manual loop: stream assistant text deltas, collect tool calls, dispatch each through the built-in tool registry, append `tool_call` + `tool_result` events, feed the results back into the next step. The loop terminates when the model produces no tool calls or `maxSteps` is hit.
 6. Every event is appended to the session JSONL via [`appendSessionEvent`](src/core/session-store.ts) as it happens — no batching.
 7. Codex Responses HTTP errors (429 + 5xx) are retried with exponential backoff + jitter (default 3 attempts, base 500ms, cap 5s) before the agent loop sees them. `Retry-After` is honored on 429. See `fetchCodexWithRetry` in [src/core/codex-responses-client.ts](src/core/codex-responses-client.ts).

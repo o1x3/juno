@@ -8,12 +8,39 @@ import { computeLineDiff } from '@/core/diff';
 import { ensureParent, resolveInside, truncateText } from '@/core/fs';
 import { appendSessionEvent } from '@/core/session-store';
 import type {
+  ApprovalPreview,
+  QuestionOption,
   TodoItem,
   TodoStatus,
   ToolContext,
+  ToolName,
   ToolResult,
   ToolSpec,
 } from '@/types';
+
+async function requireApproval(
+  ctx: ToolContext,
+  toolName: ToolName,
+  preview: ApprovalPreview,
+): Promise<{ approved: boolean; reason?: string }> {
+  if (!ctx.requestApproval) return { approved: true };
+  const decision = await ctx.requestApproval({ toolName, preview });
+  if (decision === 'approve' || decision === 'approve_forever') {
+    return { approved: true };
+  }
+  if (decision === 'reject') {
+    return { approved: false };
+  }
+  // rich rejection: { decision: 'reject', reason }
+  return { approved: false, reason: decision.reason };
+}
+
+function rejectionMessage(toolName: ToolName, reason?: string): string {
+  if (reason && reason.trim().length > 0) {
+    return `user rejected ${toolName}: ${reason.trim()}`;
+  }
+  return `user rejected ${toolName}`;
+}
 
 const GLOB_RESULT_LIMIT = 1000;
 const LS_RESULT_LIMIT = 500;
@@ -167,11 +194,10 @@ export function createBuiltinTools(context: ToolContext): ToolSpec[] {
         filePath: z.string(),
         content: z.string(),
       }),
-      execute: async (input) => {
+      execute: async (input, runtimeContext) => {
         const toolCallId = String(input.toolCallId ?? crypto.randomUUID());
         try {
           const path = resolveInside(context.cwd, String(input.filePath));
-          await ensureParent(path);
           const nextContent = String(input.content);
           let oldContent = '';
           let created = false;
@@ -187,9 +213,24 @@ export function createBuiltinTools(context: ToolContext): ToolSpec[] {
               throw readError;
             }
           }
-          await writeFile(path, nextContent, 'utf8');
           const diff = computeLineDiff(oldContent, nextContent);
           if (created) diff.created = true;
+          const gate = await requireApproval(runtimeContext, 'Write', {
+            kind: 'write',
+            path,
+            bytes: nextContent.length,
+            created,
+            diff,
+          });
+          if (!gate.approved) {
+            return fail(
+              toolCallId,
+              'Write',
+              `${rejectionMessage('Write', gate.reason)} (path: ${path})`,
+            );
+          }
+          await ensureParent(path);
+          await writeFile(path, nextContent, 'utf8');
           return ok(toolCallId, 'Write', {
             path,
             bytes: nextContent.length,
@@ -214,7 +255,7 @@ export function createBuiltinTools(context: ToolContext): ToolSpec[] {
         oldString: z.string(),
         newString: z.string(),
       }),
-      execute: async (input) => {
+      execute: async (input, runtimeContext) => {
         const toolCallId = String(input.toolCallId ?? crypto.randomUUID());
         try {
           const path = resolveInside(context.cwd, String(input.filePath));
@@ -232,8 +273,20 @@ export function createBuiltinTools(context: ToolContext): ToolSpec[] {
             );
           }
           const next = content.replace(oldString, String(input.newString));
-          await writeFile(path, next, 'utf8');
           const diff = computeLineDiff(content, next);
+          const gate = await requireApproval(runtimeContext, 'Edit', {
+            kind: 'edit',
+            path,
+            diff,
+          });
+          if (!gate.approved) {
+            return fail(
+              toolCallId,
+              'Edit',
+              `${rejectionMessage('Edit', gate.reason)} (path: ${path})`,
+            );
+          }
+          await writeFile(path, next, 'utf8');
           return ok(toolCallId, 'Edit', { path, replaced: true, diff });
         } catch (error) {
           return fail(
@@ -258,7 +311,7 @@ export function createBuiltinTools(context: ToolContext): ToolSpec[] {
           }),
         ),
       }),
-      execute: async (input) => {
+      execute: async (input, runtimeContext) => {
         const toolCallId = String(input.toolCallId ?? crypto.randomUUID());
         try {
           const rawEdits = input.edits;
@@ -348,10 +401,23 @@ export function createBuiltinTools(context: ToolContext): ToolSpec[] {
               : buffer.replace(oldString, newString);
           }
 
-          await ensureParent(filePath);
-          await writeFile(filePath, buffer, 'utf8');
           const diff = computeLineDiff(originalContent, buffer);
           if (created) diff.created = true;
+          const gate = await requireApproval(runtimeContext, 'MultiEdit', {
+            kind: 'multi-edit',
+            path: filePath,
+            created,
+            diff,
+          });
+          if (!gate.approved) {
+            return fail(
+              toolCallId,
+              'MultiEdit',
+              `${rejectionMessage('MultiEdit', gate.reason)} (path: ${filePath})`,
+            );
+          }
+          await ensureParent(filePath);
+          await writeFile(filePath, buffer, 'utf8');
           return ok(toolCallId, 'MultiEdit', {
             path: filePath,
             diff,
@@ -376,10 +442,22 @@ export function createBuiltinTools(context: ToolContext): ToolSpec[] {
       inputSchema: z.object({
         command: z.string(),
       }),
-      execute: async (input) => {
+      execute: async (input, runtimeContext) => {
         const toolCallId = String(input.toolCallId ?? crypto.randomUUID());
         try {
-          const result = await executeShellCommand(String(input.command), {
+          const command = String(input.command);
+          const gate = await requireApproval(runtimeContext, 'Bash', {
+            kind: 'bash',
+            command,
+          });
+          if (!gate.approved) {
+            return fail(
+              toolCallId,
+              'Bash',
+              rejectionMessage('Bash', gate.reason),
+            );
+          }
+          const result = await executeShellCommand(command, {
             cwd: context.cwd,
             timeoutMs: context.bashTimeoutMs,
             outputLimit: context.outputLimit,
@@ -687,6 +765,198 @@ export function createBuiltinTools(context: ToolContext): ToolSpec[] {
           return fail(
             toolCallId,
             'LS',
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+      },
+    },
+    {
+      name: 'AskUserQuestion',
+      description:
+        'Pause and ask the user a question with 2-4 structured options. Accepts either a single question (`{ question, options, ... }`) or a multi-question batch (`{ questions: [{ question, options, ... }] }`, up to 3). Use only when a decision genuinely requires the user (preference, ambiguous intent, irreversible side effect). Do not use to stall in prose.',
+      inputSchema: z.union([
+        z.object({
+          question: z.string().min(1),
+          header: z.string().max(30).optional(),
+          options: z
+            .array(
+              z.object({
+                label: z.string().min(1),
+                description: z.string().optional(),
+              }),
+            )
+            .min(2)
+            .max(4),
+          multiSelect: z.boolean().optional(),
+          allowCustom: z.boolean().optional(),
+          isSecret: z.boolean().optional(),
+        }),
+        z.object({
+          questions: z
+            .array(
+              z.object({
+                question: z.string().min(1),
+                header: z.string().max(30).optional(),
+                options: z
+                  .array(
+                    z.object({
+                      label: z.string().min(1),
+                      description: z.string().optional(),
+                    }),
+                  )
+                  .min(2)
+                  .max(4),
+                multiSelect: z.boolean().optional(),
+                allowCustom: z.boolean().optional(),
+                isSecret: z.boolean().optional(),
+              }),
+            )
+            .min(1)
+            .max(3),
+        }),
+      ]),
+      execute: async (input, runtimeContext) => {
+        const toolCallId = String(input.toolCallId ?? crypto.randomUUID());
+        try {
+          if (!runtimeContext.requestUserAnswer) {
+            return fail(
+              toolCallId,
+              'AskUserQuestion',
+              'AskUserQuestion is not wired in this runtime',
+            );
+          }
+
+          type RawQuestion = {
+            question?: unknown;
+            header?: unknown;
+            options?: unknown;
+            multiSelect?: unknown;
+            allowCustom?: unknown;
+            isSecret?: unknown;
+          };
+
+          const rawQuestions: RawQuestion[] = Array.isArray(
+            (input as { questions?: unknown }).questions,
+          )
+            ? ((input as { questions: unknown[] }).questions as RawQuestion[])
+            : [input as RawQuestion];
+
+          if (rawQuestions.length < 1 || rawQuestions.length > 3) {
+            return fail(
+              toolCallId,
+              'AskUserQuestion',
+              `questions must have between 1 and 3 entries (got ${rawQuestions.length})`,
+            );
+          }
+
+          type NormalizedQuestion = {
+            question: string;
+            header?: string;
+            options: QuestionOption[];
+            multiSelect: boolean;
+            allowCustom: boolean;
+            isSecret: boolean;
+          };
+          const normalized: NormalizedQuestion[] = [];
+          for (let i = 0; i < rawQuestions.length; i += 1) {
+            const raw = rawQuestions[i] ?? {};
+            if (typeof raw.question !== 'string' || raw.question.length === 0) {
+              return fail(
+                toolCallId,
+                'AskUserQuestion',
+                `questions[${i}].question must be a non-empty string`,
+              );
+            }
+            const rawOptions = Array.isArray(raw.options) ? raw.options : [];
+            const options: QuestionOption[] = rawOptions
+              .map((rawOpt) => {
+                const obj = (rawOpt ?? {}) as Record<string, unknown>;
+                const label = typeof obj.label === 'string' ? obj.label : '';
+                const description =
+                  typeof obj.description === 'string'
+                    ? obj.description
+                    : undefined;
+                return { label, description };
+              })
+              .filter((opt) => opt.label.length > 0);
+            if (options.length < 2 || options.length > 4) {
+              return fail(
+                toolCallId,
+                'AskUserQuestion',
+                `questions[${i}].options must have between 2 and 4 entries (got ${options.length})`,
+              );
+            }
+            normalized.push({
+              question: raw.question,
+              header: typeof raw.header === 'string' ? raw.header : undefined,
+              options,
+              multiSelect: Boolean(raw.multiSelect),
+              allowCustom: raw.allowCustom !== false,
+              isSecret: Boolean(raw.isSecret),
+            });
+          }
+
+          type PerAnswer = {
+            question: string;
+            header?: string;
+            selected: string[];
+            custom?: string;
+          };
+          const answers: PerAnswer[] = [];
+          for (let i = 0; i < normalized.length; i += 1) {
+            const q = normalized[i];
+            if (!q) continue;
+            const response = await runtimeContext.requestUserAnswer({
+              questionId: crypto.randomUUID(),
+              question: q.question,
+              header: q.header,
+              options: q.options,
+              multiSelect: q.multiSelect,
+              allowCustom: q.allowCustom,
+              isSecret: q.isSecret,
+              progress:
+                normalized.length > 1
+                  ? { current: i + 1, total: normalized.length }
+                  : undefined,
+            });
+            if (response.kind === 'dismissed') {
+              return fail(
+                toolCallId,
+                'AskUserQuestion',
+                `user dismissed question ${i + 1} of ${normalized.length}`,
+              );
+            }
+            const entry: PerAnswer = {
+              question: q.question,
+              ...(q.header ? { header: q.header } : {}),
+              selected: response.selected,
+              ...(response.custom !== undefined
+                ? { custom: response.custom }
+                : {}),
+            };
+            answers.push(entry);
+          }
+
+          // For single-question back-compat, expose flat fields too so existing
+          // models / tests that read `output.answers` as a string[] keep working.
+          if (answers.length === 1) {
+            const only = answers[0];
+            if (!only) {
+              return fail(toolCallId, 'AskUserQuestion', 'no answer collected');
+            }
+            return ok(toolCallId, 'AskUserQuestion', {
+              answers: only.selected,
+              ...(only.custom !== undefined ? { custom: only.custom } : {}),
+            });
+          }
+
+          return ok(toolCallId, 'AskUserQuestion', {
+            answers,
+          });
+        } catch (error) {
+          return fail(
+            toolCallId,
+            'AskUserQuestion',
             error instanceof Error ? error.message : String(error),
           );
         }
