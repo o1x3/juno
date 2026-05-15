@@ -1,9 +1,13 @@
 import { appendSessionEvent } from '@/core/session-store';
 import type {
   AgentConfig,
+  ApprovalDecision,
+  ApprovalRequest,
   ModelClient,
   ModelUsage,
   ProjectInstructionSet,
+  QuestionRequest,
+  QuestionResponse,
   RawAgentTurnResult,
   SerializedMessage,
   ToolCall,
@@ -24,6 +28,8 @@ type TurnOptions = {
   onToolCall?: (call: ToolCall) => void;
   onToolResult?: (result: ToolResult) => void;
   onUsage?: (usage: ModelUsage) => void;
+  requestApproval?: (req: ApprovalRequest) => Promise<ApprovalDecision>;
+  requestUserAnswer?: (req: QuestionRequest) => Promise<QuestionResponse>;
 };
 
 function mergeUsage(
@@ -58,6 +64,8 @@ export async function runAgentTurn(
     onToolCall,
     onToolResult,
     onUsage,
+    requestApproval,
+    requestUserAnswer,
   } = options;
 
   const conversation = [
@@ -139,6 +147,8 @@ export async function runAgentTurn(
           bashTimeoutMs: config.bashTimeoutMs,
           sessionsDir: config.sessionsDir,
           sessionId,
+          requestApproval,
+          requestUserAnswer,
         },
       );
       results.push(result);

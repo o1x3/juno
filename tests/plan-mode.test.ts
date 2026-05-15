@@ -51,15 +51,16 @@ describe('buildSystemPrompt', () => {
 });
 
 describe('plan-mode tool allowlist', () => {
-  test('allowlist contains Read, Grep, Glob, LS, TodoWrite', () => {
+  test('allowlist contains Read, Grep, Glob, LS, TodoWrite, AskUserQuestion', () => {
     expect(PLAN_MODE_TOOLS.has('Read')).toBe(true);
     expect(PLAN_MODE_TOOLS.has('Grep')).toBe(true);
     expect(PLAN_MODE_TOOLS.has('Glob')).toBe(true);
     expect(PLAN_MODE_TOOLS.has('LS')).toBe(true);
     expect(PLAN_MODE_TOOLS.has('TodoWrite')).toBe(true);
+    expect(PLAN_MODE_TOOLS.has('AskUserQuestion')).toBe(true);
   });
 
-  test('filterToolsForMode("plan") exposes read-only tools and TodoWrite, drops mutating tools', () => {
+  test('filterToolsForMode("plan") exposes read-only tools + TodoWrite + AskUserQuestion, drops mutating tools', () => {
     const filtered = filterToolsForMode(createBuiltinTools(ctx), 'plan').map(
       (t) => t.name,
     );
@@ -68,6 +69,7 @@ describe('plan-mode tool allowlist', () => {
     expect(filtered).toContain('Glob');
     expect(filtered).toContain('LS');
     expect(filtered).toContain('TodoWrite');
+    expect(filtered).toContain('AskUserQuestion');
     expect(filtered).not.toContain('Bash');
     expect(filtered).not.toContain('Write');
     expect(filtered).not.toContain('Edit');
@@ -86,8 +88,53 @@ describe('plan-mode tool allowlist', () => {
       'Glob',
       'LS',
       'TodoWrite',
+      'AskUserQuestion',
     ] as const) {
       expect(filtered).toContain(name);
     }
+  });
+
+  test('filterToolsForMode("yolo") returns the full set (parity with exec)', () => {
+    const filtered = filterToolsForMode(createBuiltinTools(ctx), 'yolo').map(
+      (t) => t.name,
+    );
+    for (const name of [
+      'Read',
+      'Write',
+      'Edit',
+      'Bash',
+      'Grep',
+      'Glob',
+      'LS',
+      'TodoWrite',
+      'AskUserQuestion',
+    ] as const) {
+      expect(filtered).toContain(name);
+    }
+  });
+});
+
+describe('yolo-mode system prompt', () => {
+  test('exec does not include yolo preamble', () => {
+    const out = buildSystemPrompt(empty, 'exec');
+    expect(out).not.toContain('YOLO MODE');
+  });
+
+  test('yolo includes yolo preamble', () => {
+    const out = buildSystemPrompt(empty, 'yolo');
+    expect(out).toContain('YOLO MODE');
+    expect(out).toContain('Approval prompts are off');
+  });
+
+  test('yolo still inherits exec action-bias rule', () => {
+    const out = buildSystemPrompt(empty, 'yolo');
+    expect(out).toContain('Default to action');
+  });
+
+  test('plan and yolo are mutually exclusive in the prompt', () => {
+    const plan = buildSystemPrompt(empty, 'plan');
+    expect(plan).not.toContain('YOLO MODE');
+    const yolo = buildSystemPrompt(empty, 'yolo');
+    expect(yolo).not.toContain('PLAN MODE');
   });
 });

@@ -1,6 +1,12 @@
 import { join } from 'node:path';
 import { Box, Text, useApp, useInput, useStdout } from 'ink';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  addToolApprovalForever,
+  isToolApprovedForever,
+  loadApprovalAllowlist,
+  saveApprovalAllowlist,
+} from '@/core/approvals';
 import { resolveAuthSummary, startOrResumeChat } from '@/core/chat-service';
 import { type ConfigFile, saveConfig } from '@/core/config';
 import {
@@ -17,13 +23,23 @@ import {
 import type {
   AgentConfig,
   AgentMode,
+  ApprovalDecision,
+  ApprovalRequest,
   ModelUsage,
+  QuestionOption,
+  QuestionRequest,
+  QuestionResponse,
   TodoItem,
   ToolCall,
+  ToolName,
   ToolResult,
 } from '@/types';
 import { filterCommands, parseSlashInput } from '@/ui/commands';
-import type { ToolEntry, TranscriptCell } from '@/ui/components/cells';
+import {
+  summarizePlanCounts,
+  type ToolEntry,
+  type TranscriptCell,
+} from '@/ui/components/cells';
 import { CommandPalette } from '@/ui/components/command-palette';
 import { Composer } from '@/ui/components/composer';
 import { SettingsPage } from '@/ui/components/settings-page';
@@ -35,6 +51,8 @@ import { matchKeybind } from '@/ui/keybinds';
 import { computeChatHeight } from '@/ui/layout';
 import { colors, glyphs, modeAccent } from '@/ui/theme';
 import { VERSION } from '@/version';
+
+const STALE_PLAN_TURN_THRESHOLD = 4;
 
 type ChatAppProps = {
   config: AgentConfig;
@@ -132,8 +150,61 @@ export function ChatApp({
   const [paletteIndex, setPaletteIndex] = useState(0);
   const [draftConfig, setDraftConfig] = useState<ConfigFile>({});
   const [currentPlan, setCurrentPlan] = useState<TodoItem[]>([]);
+  const [turnsSincePlanUpdate, setTurnsSincePlanUpdate] = useState<number>(
+    Number.POSITIVE_INFINITY,
+  );
   const [upgradeStatus, setUpgradeStatus] = useState<string | undefined>(
     undefined,
+  );
+
+  type PendingApproval = {
+    cellId: string;
+    resolve: (decision: ApprovalDecision) => void;
+  };
+  type PendingQuestion = {
+    cellId: string;
+    request: QuestionRequest;
+    resolve: (response: QuestionResponse) => void;
+  };
+  type PendingConfirmation = {
+    cellId: string;
+    resolve: (confirmed: boolean) => void;
+  };
+
+  const pendingApprovalRef = useRef<PendingApproval | null>(null);
+  const [pendingApprovalCellId, setPendingApprovalCellId] = useState<
+    string | null
+  >(null);
+  const pendingQuestionRef = useRef<PendingQuestion | null>(null);
+  const [pendingQuestionCellId, setPendingQuestionCellId] = useState<
+    string | null
+  >(null);
+  const pendingConfirmationRef = useRef<PendingConfirmation | null>(null);
+  const [pendingConfirmationCellId, setPendingConfirmationCellId] = useState<
+    string | null
+  >(null);
+
+  const sessionApprovalsRef = useRef<Set<ToolName>>(new Set());
+  const [approvalStore, setApprovalStore] = useState<
+    Record<string, ToolName[]>
+  >({});
+  const approvalStoreRef = useRef<Record<string, ToolName[]>>({});
+  useEffect(() => {
+    approvalStoreRef.current = approvalStore;
+  }, [approvalStore]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadApprovalAllowlist(initialConfig.homeDir).then((store) => {
+      if (!cancelled) setApprovalStore(store);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [initialConfig.homeDir]);
+
+  const promptPending = Boolean(
+    pendingApprovalCellId ?? pendingQuestionCellId ?? pendingConfirmationCellId,
   );
 
   // Background update check (and silent auto-upgrade if enabled).
@@ -272,6 +343,7 @@ export function ChatApp({
   const visualMode = useMemo(() => {
     if (bashMode) return 'bash' as const;
     if (mode === 'plan') return 'plan' as const;
+    if (mode === 'yolo') return 'yolo' as const;
     return 'exec' as const;
   }, [bashMode, mode]);
 
@@ -281,6 +353,12 @@ export function ChatApp({
   }, [composerValue]);
 
   const composerVisualMode = palette ? 'palette' : visualMode;
+
+  const planCounts = useMemo(() => {
+    if (currentPlan.length === 0) return undefined;
+    const s = summarizePlanCounts(currentPlan);
+    return { ...s, total: currentPlan.length };
+  }, [currentPlan]);
 
   const appendCell = useCallback((cell: TranscriptCell) => {
     setCells((c) => [...c, cell]);
@@ -310,6 +388,188 @@ export function ChatApp({
     ]);
     return id;
   }, []);
+
+  const requestApproval = useCallback(
+    async (req: ApprovalRequest): Promise<ApprovalDecision> => {
+      if (sessionApprovalsRef.current.has(req.toolName)) {
+        return 'approve';
+      }
+      if (
+        isToolApprovedForever(
+          approvalStoreRef.current,
+          config.cwd,
+          req.toolName,
+        )
+      ) {
+        return 'approve';
+      }
+      const cellId = `ap-${crypto.randomUUID()}`;
+      appendCell({
+        id: cellId,
+        kind: 'approval',
+        toolName: req.toolName,
+        preview: req.preview,
+        status: 'pending',
+        selectedIndex: 0,
+        feedback: '',
+        focusMode: 'options',
+        expandDiff: false,
+      });
+      const decision = await new Promise<ApprovalDecision>((resolve) => {
+        pendingApprovalRef.current = { cellId, resolve };
+        setPendingApprovalCellId(cellId);
+      });
+      pendingApprovalRef.current = null;
+      setPendingApprovalCellId(null);
+
+      const isReject =
+        decision === 'reject' ||
+        (typeof decision === 'object' && decision.decision === 'reject');
+      const isForever = decision === 'approve_forever';
+      const isApprove = decision === 'approve';
+      const settledStatus = isApprove
+        ? 'approved'
+        : isForever
+          ? 'approved_forever'
+          : 'rejected';
+      const rejectionReason =
+        typeof decision === 'object' &&
+        decision.decision === 'reject' &&
+        decision.reason
+          ? decision.reason
+          : undefined;
+      setCells((current) =>
+        current.map((cell) =>
+          cell.id === cellId && cell.kind === 'approval'
+            ? { ...cell, status: settledStatus, rejectionReason }
+            : cell,
+        ),
+      );
+
+      if (!isReject) {
+        sessionApprovalsRef.current.add(req.toolName);
+      }
+      if (isForever) {
+        const next = addToolApprovalForever(
+          approvalStoreRef.current,
+          config.cwd,
+          req.toolName,
+        );
+        approvalStoreRef.current = next;
+        setApprovalStore(next);
+        void saveApprovalAllowlist(config.homeDir, next).catch(() => {
+          // best-effort; if the disk write fails we still honor the session cache
+        });
+      }
+      return decision;
+    },
+    [appendCell, config.cwd, config.homeDir],
+  );
+
+  const requestUserAnswer = useCallback(
+    async (req: QuestionRequest): Promise<QuestionResponse> => {
+      const baseOptions: QuestionOption[] = req.options.slice();
+      const options =
+        req.allowCustom !== false
+          ? [
+              ...baseOptions,
+              {
+                label: 'Other',
+                description: 'Type a custom answer (Tab to enter notes).',
+              },
+            ]
+          : baseOptions;
+      const cellId = `q-${crypto.randomUUID()}`;
+      appendCell({
+        id: cellId,
+        kind: 'question',
+        questionId: req.questionId,
+        question: req.question,
+        header: req.header,
+        options,
+        multiSelect: Boolean(req.multiSelect),
+        status: 'pending',
+        selectedIndices: [],
+        focusMode: 'options',
+        notes: '',
+        cursor: 0,
+        isSecret: Boolean(req.isSecret),
+        progress: req.progress,
+      });
+      const response = await new Promise<QuestionResponse>((resolve) => {
+        pendingQuestionRef.current = { cellId, request: req, resolve };
+        setPendingQuestionCellId(cellId);
+      });
+      pendingQuestionRef.current = null;
+      setPendingQuestionCellId(null);
+
+      setCells((current) =>
+        current.map((cell) =>
+          cell.id === cellId && cell.kind === 'question'
+            ? {
+                ...cell,
+                status: response.kind === 'answered' ? 'answered' : 'dismissed',
+                answer: response,
+              }
+            : cell,
+        ),
+      );
+
+      return response;
+    },
+    [appendCell],
+  );
+
+  const enterYolo = useCallback(() => {
+    setMode('yolo');
+    appendCell({
+      id: `yb-${crypto.randomUUID()}`,
+      kind: 'plan-note',
+      text: '⚠ yolo · approvals off',
+    });
+  }, [appendCell]);
+
+  const tryEnterYolo = useCallback(async () => {
+    if (config.yoloAcknowledged) {
+      enterYolo();
+      return;
+    }
+    const cellId = `cf-${crypto.randomUUID()}`;
+    appendCell({
+      id: cellId,
+      kind: 'confirmation',
+      title: 'yolo mode',
+      body: [
+        'In yolo mode Juno will skip every approval prompt.',
+        'File writes, edits, and shell commands run immediately.',
+        '',
+        'You can leave yolo any time with Shift+Tab.',
+      ].join('\n'),
+      status: 'pending',
+    });
+    const confirmed = await new Promise<boolean>((resolve) => {
+      pendingConfirmationRef.current = { cellId, resolve };
+      setPendingConfirmationCellId(cellId);
+    });
+    pendingConfirmationRef.current = null;
+    setPendingConfirmationCellId(null);
+    setCells((current) =>
+      current.map((cell) =>
+        cell.id === cellId && cell.kind === 'confirmation'
+          ? { ...cell, status: confirmed ? 'confirmed' : 'cancelled' }
+          : cell,
+      ),
+    );
+    if (confirmed) {
+      try {
+        await saveConfig(config.configFile, { yoloAcknowledged: true });
+      } catch {
+        // best-effort: if we can't persist, still enter yolo this session
+      }
+      setConfig((c) => ({ ...c, yoloAcknowledged: true }));
+      enterYolo();
+    }
+  }, [appendCell, config.configFile, config.yoloAcknowledged, enterYolo]);
 
   // Turn submission
   const runChatTurn = useCallback(
@@ -342,6 +602,8 @@ export function ChatApp({
           prompt: text,
           sessionId: activeSessionId,
           mode,
+          requestApproval: mode === 'yolo' ? undefined : requestApproval,
+          requestUserAnswer,
           onSessionName: (name) => setSessionName(name),
           onTextDelta: (delta) => {
             const id = ensureAssistantCell();
@@ -395,6 +657,7 @@ export function ChatApp({
               )?.todos;
               if (Array.isArray(todos)) {
                 setCurrentPlan(todos);
+                setTurnsSincePlanUpdate(0);
                 appendCell({
                   id: `td-${result.toolCallId}`,
                   kind: 'todo',
@@ -471,9 +734,18 @@ export function ChatApp({
         setStreaming((s) => ({ ...s, errorCount: s.errorCount + 1 }));
       } finally {
         setStreaming((s) => ({ ...s, active: false }));
+        setTurnsSincePlanUpdate((n) => (Number.isFinite(n) ? n + 1 : n));
       }
     },
-    [activeSessionId, appendCell, config, mode, startNewToolGroup],
+    [
+      activeSessionId,
+      appendCell,
+      config,
+      mode,
+      requestApproval,
+      requestUserAnswer,
+      startNewToolGroup,
+    ],
   );
 
   const runBashCommand = useCallback(
@@ -754,9 +1026,356 @@ export function ChatApp({
               : c,
           );
         });
+        return;
+      }
+      if (matchKeybind('todo-toggle', input, key)) {
+        // toggle the most recent todo cell expanded/collapsed
+        setCells((current) => {
+          const idx = [...current]
+            .map((c, i) => ({ c, i }))
+            .reverse()
+            .find(({ c }) => c.kind === 'todo')?.i;
+          if (idx === undefined) return current;
+          return current.map((c, i) =>
+            i === idx && c.kind === 'todo'
+              ? { ...c, collapsed: !c.collapsed }
+              : c,
+          );
+        });
       }
     },
     { isActive: view === 'chat' },
+  );
+
+  // Prompt routing: when an approval / question / confirmation cell is
+  // pending, route keystrokes to it before they reach the composer.
+  useInput(
+    (input, key) => {
+      // Confirmation (yolo onboarding): y / n / Esc
+      if (pendingConfirmationCellId && pendingConfirmationRef.current) {
+        if (input === 'y' || input === 'Y') {
+          pendingConfirmationRef.current.resolve(true);
+          return;
+        }
+        if (input === 'n' || input === 'N' || key.escape) {
+          pendingConfirmationRef.current.resolve(false);
+          return;
+        }
+        return;
+      }
+
+      // Approval: y/a/n + 1/2/3 + arrows + Enter + Esc + Tab-to-feedback
+      if (pendingApprovalCellId && pendingApprovalRef.current) {
+        const pending = pendingApprovalRef.current;
+        const current = cells.find(
+          (c) => c.id === pendingApprovalCellId && c.kind === 'approval',
+        );
+        if (!current || current.kind !== 'approval') return;
+        const trimmedFeedback = current.feedback.trim();
+
+        const resolveReject = () => {
+          if (trimmedFeedback.length > 0) {
+            pending.resolve({ decision: 'reject', reason: trimmedFeedback });
+          } else {
+            pending.resolve('reject');
+          }
+        };
+        const resolveByIdx = (idx: number) => {
+          if (idx === 0) pending.resolve('approve');
+          else if (idx === 1) pending.resolve('approve_forever');
+          else resolveReject();
+        };
+
+        // ⌃F toggles the fullscreen / expanded diff view in either focus mode.
+        if (key.ctrl && input === 'f') {
+          setCells((all) =>
+            all.map((c) =>
+              c.id === pendingApprovalCellId && c.kind === 'approval'
+                ? { ...c, expandDiff: !c.expandDiff }
+                : c,
+            ),
+          );
+          return;
+        }
+
+        if (current.focusMode === 'feedback') {
+          if (key.tab) {
+            setCells((all) =>
+              all.map((c) =>
+                c.id === pendingApprovalCellId && c.kind === 'approval'
+                  ? { ...c, focusMode: 'options' }
+                  : c,
+              ),
+            );
+            return;
+          }
+          if (key.escape) {
+            // Esc in feedback mode rejects without the reason.
+            pending.resolve('reject');
+            return;
+          }
+          if (key.return) {
+            resolveByIdx(current.selectedIndex);
+            return;
+          }
+          if (key.backspace || key.delete) {
+            setCells((all) =>
+              all.map((c) =>
+                c.id === pendingApprovalCellId && c.kind === 'approval'
+                  ? { ...c, feedback: c.feedback.slice(0, -1) }
+                  : c,
+              ),
+            );
+            return;
+          }
+          if (input && !key.ctrl && !key.meta) {
+            setCells((all) =>
+              all.map((c) =>
+                c.id === pendingApprovalCellId && c.kind === 'approval'
+                  ? { ...c, feedback: c.feedback + input }
+                  : c,
+              ),
+            );
+          }
+          return;
+        }
+
+        // options focus
+        if (key.tab) {
+          setCells((all) =>
+            all.map((c) =>
+              c.id === pendingApprovalCellId && c.kind === 'approval'
+                ? { ...c, focusMode: 'feedback', selectedIndex: 2 }
+                : c,
+            ),
+          );
+          return;
+        }
+        if (input === 'y' || input === 'Y' || input === '1') {
+          pending.resolve('approve');
+          return;
+        }
+        if (input === 'a' || input === 'A' || input === '2') {
+          pending.resolve('approve_forever');
+          return;
+        }
+        if (input === 'n' || input === 'N' || input === '3' || key.escape) {
+          resolveReject();
+          return;
+        }
+        if (key.upArrow || input === 'k') {
+          setCells((all) =>
+            all.map((cell) =>
+              cell.id === pendingApprovalCellId && cell.kind === 'approval'
+                ? {
+                    ...cell,
+                    selectedIndex: (cell.selectedIndex + 2) % 3,
+                  }
+                : cell,
+            ),
+          );
+          return;
+        }
+        if (key.downArrow || input === 'j') {
+          setCells((all) =>
+            all.map((cell) =>
+              cell.id === pendingApprovalCellId && cell.kind === 'approval'
+                ? {
+                    ...cell,
+                    selectedIndex: (cell.selectedIndex + 1) % 3,
+                  }
+                : cell,
+            ),
+          );
+          return;
+        }
+        if (key.return) {
+          resolveByIdx(current.selectedIndex);
+          return;
+        }
+        return;
+      }
+
+      // Question: digits / arrows / Tab / Enter / Esc / typing in notes
+      if (pendingQuestionCellId && pendingQuestionRef.current) {
+        const pending = pendingQuestionRef.current;
+        const current = cells.find(
+          (c) => c.id === pendingQuestionCellId && c.kind === 'question',
+        );
+        if (!current || current.kind !== 'question') return;
+
+        if (key.escape) {
+          pending.resolve({ kind: 'dismissed' });
+          return;
+        }
+
+        // Notes focus: capture typing
+        if (current.focusMode === 'notes') {
+          if (key.tab) {
+            setCells((all) =>
+              all.map((c) =>
+                c.id === pendingQuestionCellId && c.kind === 'question'
+                  ? { ...c, focusMode: 'options' }
+                  : c,
+              ),
+            );
+            return;
+          }
+          if (key.return) {
+            const otherIdx = current.options.findIndex(
+              (o) => o.label === 'Other',
+            );
+            const selected: number[] =
+              current.selectedIndices.length > 0
+                ? [...current.selectedIndices]
+                : otherIdx >= 0
+                  ? [otherIdx]
+                  : [];
+            const labels = selected
+              .map((i) => current.options[i]?.label)
+              .filter((s): s is string => Boolean(s));
+            pending.resolve({
+              kind: 'answered',
+              selected: labels,
+              custom: current.notes.length > 0 ? current.notes : undefined,
+            });
+            return;
+          }
+          if (key.backspace || key.delete) {
+            setCells((all) =>
+              all.map((c) =>
+                c.id === pendingQuestionCellId && c.kind === 'question'
+                  ? { ...c, notes: c.notes.slice(0, -1) }
+                  : c,
+              ),
+            );
+            return;
+          }
+          if (input && !key.ctrl && !key.meta) {
+            setCells((all) =>
+              all.map((c) =>
+                c.id === pendingQuestionCellId && c.kind === 'question'
+                  ? { ...c, notes: c.notes + input }
+                  : c,
+              ),
+            );
+          }
+          return;
+        }
+
+        // Options focus
+        if (key.tab) {
+          setCells((all) =>
+            all.map((c) =>
+              c.id === pendingQuestionCellId && c.kind === 'question'
+                ? { ...c, focusMode: 'notes' }
+                : c,
+            ),
+          );
+          return;
+        }
+        if (key.upArrow || input === 'k') {
+          setCells((all) =>
+            all.map((c) =>
+              c.id === pendingQuestionCellId && c.kind === 'question'
+                ? {
+                    ...c,
+                    cursor:
+                      (c.cursor - 1 + c.options.length) % c.options.length,
+                  }
+                : c,
+            ),
+          );
+          return;
+        }
+        if (key.downArrow || input === 'j') {
+          setCells((all) =>
+            all.map((c) =>
+              c.id === pendingQuestionCellId && c.kind === 'question'
+                ? {
+                    ...c,
+                    cursor: (c.cursor + 1) % c.options.length,
+                  }
+                : c,
+            ),
+          );
+          return;
+        }
+        const digit = Number.parseInt(input, 10);
+        if (
+          !Number.isNaN(digit) &&
+          digit >= 1 &&
+          digit <= current.options.length
+        ) {
+          const idx = digit - 1;
+          if (current.multiSelect) {
+            setCells((all) =>
+              all.map((c) => {
+                if (c.id !== pendingQuestionCellId || c.kind !== 'question')
+                  return c;
+                const has = c.selectedIndices.includes(idx);
+                return {
+                  ...c,
+                  selectedIndices: has
+                    ? c.selectedIndices.filter((i) => i !== idx)
+                    : [...c.selectedIndices, idx],
+                  cursor: idx,
+                };
+              }),
+            );
+          } else {
+            // Single-select: pick and shift focus to notes if it's the
+            // synthetic "Other" option, otherwise resolve immediately.
+            const optionLabel = current.options[idx]?.label;
+            if (optionLabel === 'Other') {
+              setCells((all) =>
+                all.map((c) =>
+                  c.id === pendingQuestionCellId && c.kind === 'question'
+                    ? {
+                        ...c,
+                        selectedIndices: [idx],
+                        cursor: idx,
+                        focusMode: 'notes',
+                      }
+                    : c,
+                ),
+              );
+            } else if (optionLabel) {
+              pending.resolve({ kind: 'answered', selected: [optionLabel] });
+            }
+          }
+          return;
+        }
+        if (key.return) {
+          if (current.multiSelect) {
+            const labels = current.selectedIndices
+              .map((i) => current.options[i]?.label)
+              .filter((s): s is string => Boolean(s));
+            if (labels.length === 0) return;
+            pending.resolve({ kind: 'answered', selected: labels });
+          } else {
+            const optionLabel = current.options[current.cursor]?.label;
+            if (!optionLabel) return;
+            if (optionLabel === 'Other') {
+              setCells((all) =>
+                all.map((c) =>
+                  c.id === pendingQuestionCellId && c.kind === 'question'
+                    ? {
+                        ...c,
+                        selectedIndices: [current.cursor],
+                        focusMode: 'notes',
+                      }
+                    : c,
+                ),
+              );
+              return;
+            }
+            pending.resolve({ kind: 'answered', selected: [optionLabel] });
+          }
+        }
+      }
+    },
+    { isActive: view === 'chat' && promptPending },
   );
 
   // Render settings view
@@ -810,7 +1429,14 @@ export function ChatApp({
   );
 
   const headerColor = modeAccent(visualMode);
-  const headerDot = visualMode === 'plan' ? glyphs.plan : '●';
+  const headerDot =
+    visualMode === 'plan'
+      ? glyphs.plan
+      : visualMode === 'yolo'
+        ? glyphs.yolo
+        : '●';
+
+  const planStale = turnsSincePlanUpdate > STALE_PLAN_TURN_THRESHOLD;
 
   return (
     <Box flexDirection="column">
@@ -852,6 +1478,8 @@ export function ChatApp({
               sessionUsage={sessionUsage}
               sessionStartedMs={sessionStartedRef.current}
               recentTurns={recentTurnsRef.current}
+              planCounts={planCounts}
+              planStale={planStale}
               toolsThisTurn={
                 lastTurnEntry && lastTurnEntry.kind === 'tool-group'
                   ? lastTurnEntry.tools.map((t) => ({
@@ -884,11 +1512,19 @@ export function ChatApp({
             ? 'shell command…'
             : palette
               ? 'type a command…'
-              : mode === 'plan'
-                ? 'plan: read-only, no edits'
-                : 'message juno…  (Shift+Tab plan · ! bash · / commands)'
+              : pendingApprovalCellId
+                ? 'awaiting approval — press y / a / n'
+                : pendingQuestionCellId
+                  ? 'awaiting answer — press 1-4 · Tab notes · Esc cancel'
+                  : pendingConfirmationCellId
+                    ? 'awaiting confirmation — press y / n'
+                    : mode === 'plan'
+                      ? 'plan: read-only, no edits'
+                      : mode === 'yolo'
+                        ? 'yolo: approvals off · message juno…'
+                        : 'message juno…  (Shift+Tab plan/exec/yolo · ! bash · / commands)'
         }
-        isActive={view === 'chat'}
+        isActive={view === 'chat' && !promptPending}
         paletteOpen={Boolean(palette)}
         onChange={(v) => {
           setComposerValue(v);
@@ -908,7 +1544,14 @@ export function ChatApp({
         }}
         onModeToggle={() => {
           if (bashMode) return;
-          setMode((m) => (m === 'plan' ? 'exec' : 'plan'));
+          if (promptPending) return;
+          if (mode === 'plan') {
+            setMode('exec');
+          } else if (mode === 'exec') {
+            void tryEnterYolo();
+          } else {
+            setMode('plan');
+          }
         }}
         onPaletteNav={(direction) => {
           if (!palette || palette.length === 0) return;
@@ -940,6 +1583,15 @@ export function ChatApp({
           contextLimit={ctxLimit}
           sessionName={sessionName}
           errorCount={streaming.errorCount}
+          awaitingUser={
+            pendingApprovalCellId
+              ? 'approval'
+              : pendingQuestionCellId
+                ? 'question'
+                : pendingConfirmationCellId
+                  ? 'confirmation'
+                  : null
+          }
         />
       </Box>
       <Box paddingX={1}>

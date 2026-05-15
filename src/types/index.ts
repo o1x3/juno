@@ -1,8 +1,10 @@
 import type { ZodType } from 'zod';
 
+import type { DiffPayload } from '@/core/diff';
+
 export type AgentRole = 'user' | 'assistant' | 'tool';
 
-export type AgentMode = 'plan' | 'exec';
+export type AgentMode = 'plan' | 'exec' | 'yolo';
 
 export type SerializedMessage =
   | {
@@ -92,7 +94,51 @@ export type ToolName =
   | 'Grep'
   | 'Glob'
   | 'LS'
-  | 'TodoWrite';
+  | 'TodoWrite'
+  | 'AskUserQuestion';
+
+export type ApprovalPreview =
+  | {
+      kind: 'write';
+      path: string;
+      bytes: number;
+      created: boolean;
+      diff?: DiffPayload;
+    }
+  | { kind: 'edit'; path: string; diff?: DiffPayload }
+  | { kind: 'multi-edit'; path: string; created: boolean; diff?: DiffPayload }
+  | { kind: 'bash'; command: string };
+
+export type ApprovalRequest = {
+  toolName: ToolName;
+  preview: ApprovalPreview;
+};
+
+export type ApprovalDecision =
+  | 'approve'
+  | 'approve_forever'
+  | 'reject'
+  | { decision: 'reject'; reason: string };
+
+export type QuestionOption = {
+  label: string;
+  description?: string;
+};
+
+export type QuestionRequest = {
+  questionId: string;
+  question: string;
+  header?: string;
+  options: QuestionOption[];
+  multiSelect?: boolean;
+  allowCustom?: boolean;
+  isSecret?: boolean;
+  progress?: { current: number; total: number };
+};
+
+export type QuestionResponse =
+  | { kind: 'answered'; selected: string[]; custom?: string }
+  | { kind: 'dismissed' };
 
 export type ToolSpec = {
   name: ToolName;
@@ -111,6 +157,8 @@ export type ToolContext = {
   bashTimeoutMs: number;
   sessionsDir: string;
   sessionId: string;
+  requestApproval?: (req: ApprovalRequest) => Promise<ApprovalDecision>;
+  requestUserAnswer?: (req: QuestionRequest) => Promise<QuestionResponse>;
 };
 
 export type CredentialRecord =
@@ -174,6 +222,7 @@ export type AgentConfig = {
   ui: UiPreferences;
   autoUpgrade: boolean;
   updateCheckEnabled: boolean;
+  yoloAcknowledged: boolean;
 };
 
 export type AuthMode = 'api-key' | 'oauth-api-key' | 'oauth-codex' | 'none';

@@ -4,7 +4,7 @@ import { formatTokens } from '@/ui/format';
 import { colors, glyphs } from '@/ui/theme';
 
 export type StatusLineProps = {
-  mode: 'plan' | 'exec' | 'bash';
+  mode: 'plan' | 'exec' | 'bash' | 'yolo';
   model: string;
   streaming: boolean;
   spinnerFrame: number;
@@ -13,6 +13,7 @@ export type StatusLineProps = {
   contextLimit: number;
   sessionName?: string;
   errorCount: number;
+  awaitingUser?: 'approval' | 'question' | 'confirmation' | null;
 };
 
 export function StatusLine(props: StatusLineProps) {
@@ -21,7 +22,9 @@ export function StatusLine(props: StatusLineProps) {
       ? colors.plan
       : props.mode === 'bash'
         ? colors.bash
-        : colors.exec;
+        : props.mode === 'yolo'
+          ? colors.yolo
+          : colors.exec;
   const tokens = props.usage
     ? `${props.usage.estimated ? '~' : ''}${formatTokens(props.usage.input + props.usage.output)}/${formatTokens(props.contextLimit)}`
     : `0/${formatTokens(props.contextLimit)}`;
@@ -34,13 +37,22 @@ export function StatusLine(props: StatusLineProps) {
       <Text color={modeColor}>{props.mode}</Text>
       <Text color={colors.dim}>{' · '}</Text>
       <Text color={colors.accent}>{props.model}</Text>
-      {props.streaming && (
+      {props.awaitingUser ? (
         <>
           <Text color={colors.dim}>{' · '}</Text>
-          <Text color={colors.tool}>
-            {spinner} streaming {sec}s
+          <Text color={colors.warn}>
+            {`⏸ awaiting ${props.awaitingUser === 'question' ? 'answer' : props.awaitingUser === 'confirmation' ? 'confirmation' : 'approval'}`}
           </Text>
         </>
+      ) : (
+        props.streaming && (
+          <>
+            <Text color={colors.dim}>{' · '}</Text>
+            <Text color={colors.tool}>
+              {spinner} streaming {sec}s
+            </Text>
+          </>
+        )
       )}
       <Text color={colors.dim}>{' · '}</Text>
       <Text color={colors.dim}>{tokens}</Text>

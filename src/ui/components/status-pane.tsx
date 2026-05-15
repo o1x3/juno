@@ -20,7 +20,7 @@ export type ContextBreakdown = {
 };
 
 export type StatusPaneProps = {
-  mode: 'plan' | 'exec' | 'bash';
+  mode: 'plan' | 'exec' | 'bash' | 'yolo';
   model: string;
   contextLimit: number;
   contextUsed: number;
@@ -37,6 +37,13 @@ export type StatusPaneProps = {
     status: 'running' | 'ok' | 'fail';
   }[];
   cost?: number;
+  planCounts?: {
+    pending: number;
+    in_progress: number;
+    completed: number;
+    total: number;
+  };
+  planStale?: boolean;
 };
 
 function pct(used: number, total: number): number {
@@ -114,6 +121,23 @@ export function StatusPane(props: StatusPaneProps) {
         {`${segGlyph} tool      ${Math.round((props.breakdown.tool / totals) * 100)}%`}
       </Text>
       <Text> </Text>
+      {props.planCounts && props.planCounts.total > 0 && (
+        <>
+          <Text color={colors.dim}>{'plan'}</Text>
+          <Text
+            color={props.planStale ? colors.dim : colors.plan}
+            dimColor={props.planStale}
+          >
+            {`${props.planCounts.completed}/${props.planCounts.total} done · ${props.planCounts.in_progress} active`}
+          </Text>
+          {props.planStale && (
+            <Text color={colors.dim} dimColor>
+              {'(stale)'}
+            </Text>
+          )}
+          <Text> </Text>
+        </>
+      )}
       <Text color={colors.dim}>{'this turn'}</Text>
       {props.turnUsage ? (
         <>

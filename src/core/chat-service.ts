@@ -29,11 +29,15 @@ import type {
   AgentConfig,
   AgentMode,
   AgentTurnResult,
+  ApprovalDecision,
+  ApprovalRequest,
   AuthMode,
   AuthStatus,
   ModelClient,
   ModelFallback,
   ModelUsage,
+  QuestionRequest,
+  QuestionResponse,
   ToolCall,
   ToolName,
   ToolResult,
@@ -46,6 +50,7 @@ export const PLAN_MODE_TOOLS: ReadonlySet<ToolName> = new Set([
   'Glob',
   'LS',
   'TodoWrite',
+  'AskUserQuestion',
 ]);
 
 type ChatOptions = {
@@ -60,6 +65,8 @@ type ChatOptions = {
   onUsage?: (usage: ModelUsage) => void;
   onSessionName?: (name: string) => void;
   namingDeps?: NamingDeps;
+  requestApproval?: (req: ApprovalRequest) => Promise<ApprovalDecision>;
+  requestUserAnswer?: (req: QuestionRequest) => Promise<QuestionResponse>;
 };
 
 type RoutingResolution = {
@@ -72,6 +79,7 @@ type RoutingResolution = {
 
 function pickModelForMode(config: AgentConfig, mode: AgentMode): string {
   if (mode === 'plan') return config.planModel;
+  // exec and yolo both run with the exec model.
   return config.execModel;
 }
 
@@ -82,6 +90,7 @@ export function filterToolsForMode(
   if (mode === 'plan') {
     return tools.filter((t) => PLAN_MODE_TOOLS.has(t.name));
   }
+  // exec and yolo expose the full tool registry.
   return tools;
 }
 
@@ -239,6 +248,8 @@ export async function startOrResumeChat(
     onToolCall: options.onToolCall,
     onToolResult: options.onToolResult,
     onUsage: options.onUsage,
+    requestApproval: options.requestApproval,
+    requestUserAnswer: options.requestUserAnswer,
   });
 
   if (isFreshSession && config.autoName && !existingName) {

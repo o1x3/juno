@@ -23,6 +23,8 @@ export const colors = {
   plan: 'magenta' as ThemeColor,
   bash: 'yellow' as ThemeColor,
   exec: 'green' as ThemeColor,
+  yolo: 'redBright' as ThemeColor,
+  warn: 'yellow' as ThemeColor,
   dim: 'gray' as ThemeColor,
   accent: 'cyan' as ThemeColor,
   muted: 'gray' as ThemeColor,
@@ -35,6 +37,17 @@ export const glyphs = {
   plan: '◆',
   bash: '$',
   error: '⚠',
+  warning: '△',
+  yolo: '!',
+  question: '?',
+  selector: '›',
+  optionPending: '○',
+  optionInProgress: '•',
+  optionDone: '✓',
+  approvalEdit: '→',
+  approvalWrite: '→',
+  approvalMultiEdit: '↻',
+  approvalBash: '#',
   bullet: '·',
   arrowDown: '↓',
   arrowUp: '↑',
@@ -53,12 +66,16 @@ export function contextColor(percent: number): ThemeColor {
   return colors.dim;
 }
 
-export function modeAccent(mode: 'plan' | 'exec' | 'bash'): ThemeColor {
+export function modeAccent(
+  mode: 'plan' | 'exec' | 'bash' | 'yolo',
+): ThemeColor {
   switch (mode) {
     case 'plan':
       return colors.plan;
     case 'bash':
       return colors.bash;
+    case 'yolo':
+      return colors.yolo;
     default:
       return colors.exec;
   }

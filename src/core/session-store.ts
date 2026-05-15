@@ -6,7 +6,12 @@ import type {
   SessionEvent,
   SessionSummary,
   TodoItem,
+  ToolName,
+  ToolResult,
 } from '@/types';
+
+const INTERRUPTED_TOOL_OUTPUT =
+  'interrupted: session ended before this tool completed';
 
 function sessionPath(sessionsDir: string, sessionId: string): string {
   return join(sessionsDir, `${sessionId}.jsonl`);
@@ -75,22 +80,49 @@ export function findLatestPlan(events: SessionEvent[]): TodoItem[] | undefined {
 
 export function restoreMessages(events: SessionEvent[]): SerializedMessage[] {
   const messages: SerializedMessage[] = [];
-  for (const event of events) {
-    if (event.type === 'user_message' || event.type === 'assistant_message') {
-      messages.push(event.message);
+  const pendingNames = new Map<string, ToolName>();
+
+  const flushPending = () => {
+    if (pendingNames.size === 0) return;
+    const synthetics: ToolResult[] = [];
+    for (const [toolCallId, toolName] of pendingNames.entries()) {
+      synthetics.push({
+        toolCallId,
+        toolName,
+        output: INTERRUPTED_TOOL_OUTPUT,
+        isError: true,
+      });
     }
-    if (event.type === 'tool_result') {
+    const last = messages.at(-1);
+    if (last?.role === 'tool') {
+      last.results.push(...synthetics);
+    } else {
+      messages.push({ role: 'tool', results: synthetics });
+    }
+    pendingNames.clear();
+  };
+
+  for (const event of events) {
+    if (event.type === 'user_message') {
+      flushPending();
+      messages.push(event.message);
+    } else if (event.type === 'assistant_message') {
+      flushPending();
+      messages.push(event.message);
+      for (const call of event.message.toolCalls ?? []) {
+        pendingNames.set(call.toolCallId, call.toolName);
+      }
+    } else if (event.type === 'tool_result') {
+      pendingNames.delete(event.result.toolCallId);
       const last = messages.at(-1);
       if (last?.role === 'tool') {
         last.results.push(event.result);
       } else {
-        messages.push({
-          role: 'tool',
-          results: [event.result],
-        });
+        messages.push({ role: 'tool', results: [event.result] });
       }
     }
   }
+  flushPending();
   return messages;
 }
 
