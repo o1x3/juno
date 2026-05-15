@@ -138,7 +138,7 @@ Stores Codex credentials at `${JUNO_HOME}/auth.json` with file mode `0o600`.
 
 Flags (mutually exclusive — first match wins):
 - `--with-api-key` *(default if no flag is given)* — reads `OPENAI_API_KEY` from the environment, or prompts on stdin via Bun's global `prompt()`. Stores it as an `api-key` credential.
-- `--browser` — starts a localhost OAuth listener on port `1455`, prints the authorize URL, and waits for the callback. Does **not** auto-open the browser.
+- `--browser` — starts a localhost OAuth listener (default port `1455`; override with `--port <n>` or `JUNO_OAUTH_PORT`), prints the authorize URL, and waits for the callback. Does **not** auto-open the browser. While waiting it also reads stdin for a pasted callback URL or `code=…&state=…` — useful when the localhost redirect can't be reached (firewall, remote dev). Whichever channel produces a valid `code+state` first wins.
 - `--device-auth` — requests a device code from `https://auth.openai.com/api/accounts`, prints the verification URL and user code, then polls until you complete it.
 
 After OAuth/device flows, Juno also tries to exchange the `id_token` for an OpenAI API key via the token-exchange grant. If that exchange fails the CLI prints:
@@ -176,6 +176,17 @@ When no credential is available the output collapses to:
 auth: none
 hint: Run `juno login` or set OPENAI_API_KEY.
 ```
+
+### `juno models`
+
+Prints the Codex-backend model registry that the chat path resolves against. Useful for confirming which models Juno will pick for OAuth-only ChatGPT-account routing, and for debugging models.dev fetch issues.
+
+```
+juno models              # use the cache if fresh, fall back to static otherwise
+juno models --refresh-codex  # bypass cache; force a fresh fetch from models.dev
+```
+
+The output is tab-separated `id\tinput=…\toutput=…\tctx=…[ safe]`. `[safe]` marks models on the ChatGPT-account safe allowlist (`gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.3-codex`, `gpt-5.3-codex-spark`, `gpt-5.2`). `source: fresh|cache|static` and the resolved registry URL print at the top. Honors `JUNO_MODELS_DEV_URL`.
 
 ### `juno sessions`
 
@@ -216,8 +227,10 @@ Resolution lives in [src/core/config.ts](src/core/config.ts).
 | `JUNO_OPENAI_AUTHORIZE_URL` | Override OAuth authorize URL. | `https://auth.openai.com/oauth/authorize` |
 | `JUNO_OPENAI_TOKEN_URL` | Override OAuth token URL. | `https://auth.openai.com/oauth/token` |
 | `JUNO_OPENAI_DEVICE_ACCOUNTS_URL` | Override device-auth base URL. | `https://auth.openai.com/api/accounts` |
+| `JUNO_OAUTH_PORT` | Localhost callback port for `juno login --browser`. CLI `--port` flag takes precedence. Integer 1–65535. | `1455` |
 | `JUNO_CODEX_BASE_URL` | Override the ChatGPT Codex backend base URL used for OAuth-only credentials. | `https://chatgpt.com/backend-api` |
 | `JUNO_CODEX_MODEL` | Pin the model used on the Codex backend (OAuth-only path). Bypasses the dynamic registry. | discovered cheapest |
+| `JUNO_MODELS_DEV_URL` | Override the models.dev registry URL. Useful for mirrors, air-gapped runs, or test doubles. | `https://models.dev/api.json` |
 
 Integer-valued env vars are validated. A non-positive-integer value (e.g. `JUNO_MAX_STEPS=foo`) raises:
 
@@ -269,7 +282,61 @@ Everything is under `${JUNO_HOME}` (default `~/.juno`):
     └── 2026-05-05T13-37-00.000Z.jsonl
 ```
 
-Session file names are derived from the creation timestamp (colons replaced with dashes). Each line is one event: `user_message`, `assistant_message`, `tool_call`, `tool_result`, or `status_meta`.
+Session file names are derived from the creation timestamp (colons replaced with dashes). Each line is one JSON event — see [Session schema (JSONL)](#session-schema-jsonl) below for the full event list and fields.
+
+## Architecture
+
+A short map of what lives where and how a turn flows through the system. All paths are relative to the repository root.
+
+### Module layout
+
+| Path | Responsibility |
+| --- | --- |
+| [src/cli/](src/cli) | `citty` command surface (`chat`, `login`, `logout`, `resume`, `sessions`, `auth`, `upgrade`, `uninstall`). Top-level dispatch is gated by `import.meta.main` so individual helpers can be imported by tests. |
+| [src/ui/](src/ui) | Ink TUI: `chat-app.tsx`, composer, transcript cells, status pane, slash-command palette, keybind registry. |
+| [src/core/](src/core) | Engine: `chat-service` (auth/model/tool routing), `agent-loop` (per-turn streaming + tool dispatch), `model-client` (AI SDK wrapper), `codex-responses-client` (ChatGPT-backend Responses SSE), `session-store` (JSONL append/replay), `tools` (built-in tool implementations), `prompt`, `instructions`, `config`, `fs`, `diff`, `naming`, `codex-models`, `upgrade`, `uninstall`. |
+| [src/auth/](src/auth) | `codex.ts` (browser OAuth + device-auth + token refresh), `storage.ts` (`auth.json` read/write + env-vs-stored resolution). |
+| [src/types/](src/types) | Shared TypeScript types. The session JSONL schema and `AgentConfig` live here. |
+| [src/version.ts](src/version.ts) | Compile-time version constant (`--define '__JUNO_VERSION__=…'` in releases; falls back to `package.json`). |
+
+### A single turn end to end
+
+1. `juno chat` (or the Ink `ChatApp`) calls [`startOrResumeChat`](src/core/chat-service.ts) with a fresh or resumed session id.
+2. The session JSONL is loaded; prior `user_message` / `assistant_message` / `tool_result` events are replayed into an in-memory message list via [`restoreMessages`](src/core/session-store.ts).
+3. [`resolveRouting`](src/core/chat-service.ts) loads `auth.json`, refreshes the OAuth token if it's within the 5-minute skew, then picks one of:
+   - **`api-key`** — env or stored API key → `createAiSdkModelClient` (Vercel AI SDK over `@ai-sdk/openai`).
+   - **`oauth-api-key`** — stored OAuth that successfully exchanged for an API key at login → same AI-SDK client.
+   - **`oauth-codex`** — OAuth without an API key → [`createCodexResponsesClient`](src/core/codex-responses-client.ts) talking to `https://chatgpt.com/backend-api/codex/responses` with `Bearer <access_token>` + `chatgpt-account-id`. The configured model is rewritten to a known-safe ChatGPT-account model when needed.
+4. [`buildSystemPrompt`](src/core/prompt.ts) merges the project-instruction walk (`CLAUDE.md`/`AGENTS.md` from cwd up to git root) with the mode preamble (`exec` or `plan`). In plan mode the tool whitelist is also filtered to `{Read, Grep, Glob, LS, TodoWrite}` (`PLAN_MODE_TOOLS` in `chat-service.ts`).
+5. [`runAgentTurn`](src/core/agent-loop.ts) calls `modelClient.runStep(...)` in a manual loop: stream assistant text deltas, collect tool calls, dispatch each through the built-in tool registry, append `tool_call` + `tool_result` events, feed the results back into the next step. The loop terminates when the model produces no tool calls or `maxSteps` is hit.
+6. Every event is appended to the session JSONL via [`appendSessionEvent`](src/core/session-store.ts) as it happens — no batching.
+7. Codex Responses HTTP errors (429 + 5xx) are retried with exponential backoff + jitter (default 3 attempts, base 500ms, cap 5s) before the agent loop sees them. `Retry-After` is honored on 429. See `fetchCodexWithRetry` in [src/core/codex-responses-client.ts](src/core/codex-responses-client.ts).
+
+## Session schema (JSONL)
+
+Each session is an append-only file at `${JUNO_HOME}/sessions/<sessionId>.jsonl`. Every line is a single JSON object terminated by `\n`. The discriminator is `type`. Events are listed in roughly the order a turn produces them.
+
+| `type` | Required fields | Notes |
+| --- | --- | --- |
+| `status_meta` | `timestamp`, `status` (`session_started` \| `session_resumed` \| `turn_completed`), `sessionId`, `cwd`, `model`. Optional `note`. | Emitted on session creation / resume and at turn boundaries. |
+| `session_meta` | `timestamp`, `name`, `source` (`auto` \| `manual`). | Written by the background naming pass after the first user turn. `findSessionName` returns the most recent one. |
+| `user_message` | `timestamp`, `message.role: 'user'`, `message.content: string`. | One per user turn. |
+| `assistant_message` | `timestamp`, `message.role: 'assistant'`, `message.content: string`, optional `message.toolCalls: ToolCall[]`. | One per model step that produced assistant text and/or tool calls. |
+| `tool_call` | `timestamp`, `call: { toolCallId, toolName, input }`. | One per tool the model invoked. `toolName` is one of `Read`, `Write`, `Edit`, `Bash`, `Grep`, `Glob`, `LS`, `TodoWrite`. |
+| `tool_result` | `timestamp`, `result: { toolCallId, toolName, output, isError? }`. | Pairs one-to-one with `tool_call` by `toolCallId`. `output` is tool-specific; `Edit`/`Write` results carry a `DiffPayload`. |
+| `todo_update` | `timestamp`, `todos: TodoItem[]`. | Written every time the model calls `TodoWrite`. Full-list replace semantics; the most recent event wins. `findLatestPlan` reads this. |
+
+`ToolCall`, `ToolResult`, and `TodoItem` are defined in [src/types/index.ts](src/types/index.ts). `restoreMessages` and `findLatestPlan` in [src/core/session-store.ts](src/core/session-store.ts) are the canonical readers.
+
+Example (truncated) lines:
+
+```jsonl
+{"type":"status_meta","timestamp":"2026-05-14T12:00:00.000Z","status":"session_started","sessionId":"2026-05-14T12-00-00.000Z","cwd":"/work/juno","model":"gpt-5.4-mini"}
+{"type":"user_message","timestamp":"2026-05-14T12:00:01.000Z","message":{"role":"user","content":"list this dir"}}
+{"type":"tool_call","timestamp":"2026-05-14T12:00:02.100Z","call":{"toolCallId":"call_1","toolName":"LS","input":{"path":"."}}}
+{"type":"tool_result","timestamp":"2026-05-14T12:00:02.150Z","result":{"toolCallId":"call_1","toolName":"LS","output":"README.md\nsrc/\n..."}}
+{"type":"assistant_message","timestamp":"2026-05-14T12:00:03.000Z","message":{"role":"assistant","content":"You have a README and a src directory."}}
+```
 
 ## Project instructions
 
@@ -335,7 +402,7 @@ Your `config.json` is malformed or contains an unsupported key. The error messag
 A `JUNO_*` integer env var was set to something that is not a positive integer. Unset it or correct the value.
 
 **OAuth callback never returns / port 1455 in use**
-The browser flow opens an HTTP listener on `127.0.0.1:1455`. There is currently no fallback or override for this port, and there is no manual-paste fallback if the callback fails. Free the port and retry.
+The browser flow opens an HTTP listener on `127.0.0.1:1455` by default. Override with `juno login --browser --port <n>` or `JUNO_OAUTH_PORT=<n>`. While the server is waiting, `juno login` also reads stdin — paste the full callback URL (or just `code=…&state=…`) and press Enter to complete the flow without needing the redirect to reach localhost. Whichever channel produces a valid `code+state` first wins.
 
 **`juno chat` hangs after a tool call**
 Long multi-turn sessions and resume-after-tool-heavy sessions are not yet verified — see *In Progress / Unproven* in `docs/TODO.md`. If you hit this, kill the process and start a new session; the JSONL on disk up to the last completed event is preserved.

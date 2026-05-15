@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
 export type CodexModel = {
@@ -21,9 +21,16 @@ export type CodexModelChoice = {
   source: CodexRegistry['source'];
 };
 
-const MODELS_DEV_URL = 'https://models.dev/api.json';
+const DEFAULT_MODELS_DEV_URL = 'https://models.dev/api.json';
 const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 3000;
+
+export function resolveModelsDevUrl(
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const override = env.JUNO_MODELS_DEV_URL?.trim();
+  return override && override.length > 0 ? override : DEFAULT_MODELS_DEV_URL;
+}
 
 // Models known to be accepted by the ChatGPT-account Codex backend.
 // Sourced from ref/opencode/packages/opencode/src/plugin/codex.ts and the
@@ -151,7 +158,7 @@ async function writeCache(
 }
 
 async function defaultFetcher(): Promise<Response> {
-  return fetch(MODELS_DEV_URL, {
+  return fetch(resolveModelsDevUrl(), {
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
 }
@@ -160,6 +167,20 @@ let processCache: Promise<CodexRegistry> | undefined;
 
 export function resetCodexRegistryCache(): void {
   processCache = undefined;
+}
+
+/**
+ * Force a fresh fetch from models.dev (honoring `JUNO_MODELS_DEV_URL`).
+ * Clears both the in-process memo and the on-disk cache, then delegates to
+ * `discoverCodexModels`. Returns the fresh registry, falling back to cache /
+ * static the same way the regular discovery does on network failure.
+ */
+export async function refreshCodexRegistry(
+  options: DiscoverOptions,
+): Promise<CodexRegistry> {
+  resetCodexRegistryCache();
+  await rm(cacheFile(options.homeDir), { force: true });
+  return discoverCodexModels(options);
 }
 
 export async function discoverCodexModels(

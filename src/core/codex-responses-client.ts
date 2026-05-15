@@ -21,13 +21,94 @@ function estimateUsage(input: string, output: string): ModelUsage {
   };
 }
 
+export type CodexRetryOptions = {
+  maxAttempts?: number;
+  baseDelayMs?: number;
+  maxDelayMs?: number;
+  jitterRatio?: number;
+};
+
 type CodexClientConfig = {
   baseUrl: string;
   accessToken: string;
   accountId: string;
   sessionId?: string;
   fetchImpl?: typeof fetch;
+  sleepImpl?: (ms: number) => Promise<void>;
+  retry?: CodexRetryOptions;
 };
+
+const DEFAULT_RETRY: Required<CodexRetryOptions> = {
+  maxAttempts: 3,
+  baseDelayMs: 500,
+  maxDelayMs: 5000,
+  jitterRatio: 0.25,
+};
+
+export function parseRetryAfter(
+  header: string | null,
+  now: number = Date.now(),
+): number | null {
+  if (header === null || header === undefined) return null;
+  const trimmed = header.trim();
+  if (trimmed.length === 0) return null;
+  const seconds = Number(trimmed);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.round(seconds * 1000);
+  }
+  const date = Date.parse(trimmed);
+  if (!Number.isNaN(date)) {
+    return Math.max(0, date - now);
+  }
+  return null;
+}
+
+export function isRetryableStatus(status: number): boolean {
+  return status === 429 || (status >= 500 && status <= 599);
+}
+
+async function defaultSleep(ms: number): Promise<void> {
+  if (ms <= 0) return;
+  await new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+export async function fetchCodexWithRetry(
+  fetchImpl: typeof fetch,
+  url: string,
+  init: RequestInit,
+  options: {
+    sleep?: (ms: number) => Promise<void>;
+    retry?: CodexRetryOptions;
+    random?: () => number;
+  } = {},
+): Promise<Response> {
+  const cfg = { ...DEFAULT_RETRY, ...(options.retry ?? {}) };
+  const sleep = options.sleep ?? defaultSleep;
+  const random = options.random ?? Math.random;
+
+  let response: Response | undefined;
+  for (let attempt = 1; attempt <= cfg.maxAttempts; attempt++) {
+    response = await fetchImpl(url, init);
+    if (response.ok) return response;
+    if (!isRetryableStatus(response.status) || attempt === cfg.maxAttempts) {
+      return response;
+    }
+    const headerWait = parseRetryAfter(response.headers.get('retry-after'));
+    const exp = Math.min(cfg.maxDelayMs, cfg.baseDelayMs * 2 ** (attempt - 1));
+    const wait = headerWait ?? exp;
+    const jitter = random() * wait * cfg.jitterRatio;
+    if (response.body) {
+      try {
+        await response.body.cancel();
+      } catch {
+        // ignore
+      }
+    }
+    await sleep(wait + jitter);
+  }
+  // Unreachable: the loop always returns or sleeps and loops; TS satisfied.
+  return response as Response;
+}
 
 type CodexInputItem =
   | {
@@ -300,11 +381,16 @@ export function createCodexResponsesClient(
       const url = resolveCodexUrl(config.baseUrl);
       const fetchImpl = config.fetchImpl ?? fetch;
 
-      const response = await fetchImpl(url, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body),
-      });
+      const response = await fetchCodexWithRetry(
+        fetchImpl,
+        url,
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(body),
+        },
+        { sleep: config.sleepImpl, retry: config.retry },
+      );
 
       if (!response.ok) {
         const text = await response.text().catch(() => '');

@@ -2,13 +2,23 @@
 import { defineCommand, runCommand, runMain } from 'citty';
 import { render } from 'ink';
 import type React from 'react';
-import { loginWithBrowser, loginWithDeviceCode } from '@/auth/codex';
+import {
+  DEFAULT_OAUTH_PORT,
+  loginWithBrowser,
+  loginWithDeviceCode,
+} from '@/auth/codex';
 import { clearCredential, saveCredential } from '@/auth/storage';
 import {
   createStoredApiCredential,
   resolveAuthStatus,
   startOrResumeChat,
 } from '@/core/chat-service';
+import {
+  CHATGPT_ACCOUNT_SAFE_MODELS,
+  discoverCodexModels,
+  refreshCodexRegistry,
+  resolveModelsDevUrl,
+} from '@/core/codex-models';
 import { resolveConfig } from '@/core/config';
 import { listSessions } from '@/core/session-store';
 import {
@@ -39,6 +49,23 @@ async function renderFullscreen(node: React.ReactElement): Promise<void> {
   await instance.waitUntilExit();
   restore();
   process.off('exit', restore);
+}
+
+export function resolveOAuthPort(
+  cliPort?: string,
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  const raw = cliPort ?? env.JUNO_OAUTH_PORT;
+  if (raw === undefined || raw === '') {
+    return DEFAULT_OAUTH_PORT;
+  }
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) {
+    throw new Error(
+      `Invalid OAuth callback port: ${raw}. Expected an integer in [1, 65535].`,
+    );
+  }
+  return parsed;
 }
 
 function formatExpiresIn(seconds: number): string {
@@ -161,6 +188,12 @@ const loginCommand = defineCommand({
       type: 'boolean',
       default: false,
     },
+    port: {
+      type: 'string',
+      description:
+        'Localhost port for the OAuth callback (default 1455, also JUNO_OAUTH_PORT).',
+      required: false,
+    },
   },
   async run({ args }) {
     const config = resolveConfig();
@@ -187,8 +220,13 @@ const loginCommand = defineCommand({
       return;
     }
 
-    const login = await loginWithBrowser();
+    const port = resolveOAuthPort(args.port);
+    const login = await loginWithBrowser({ port });
     process.stdout.write(`Open this URL to continue:\n${login.url}\n`);
+    process.stdout.write(
+      `Callback will be received at ${login.redirectUri}\n` +
+        'If the redirect does not work, paste the callback URL (or `code=…&state=…`) here and press Enter:\n',
+    );
     const credential = await login.credential;
     await saveCredential(config.authFile, credential);
     process.stdout.write(`Stored OAuth credential in ${config.authFile}\n`);
@@ -257,6 +295,42 @@ const authStatusCommand = defineCommand({
     const config = resolveConfig();
     const status = await resolveAuthStatus(config);
     process.stdout.write(formatAuthStatus(status));
+  },
+});
+
+const modelsCommand = defineCommand({
+  meta: {
+    name: 'models',
+    description:
+      'List the Codex-backend model registry (cached or freshly fetched).',
+  },
+  args: {
+    'refresh-codex': {
+      type: 'boolean',
+      description:
+        'Force re-fetch from models.dev (honors JUNO_MODELS_DEV_URL). Bypasses the on-disk and in-process cache.',
+      default: false,
+    },
+  },
+  async run({ args }) {
+    const config = resolveConfig();
+    const refresh = Boolean(args['refresh-codex']);
+    const registry = refresh
+      ? await refreshCodexRegistry({ homeDir: config.homeDir })
+      : await discoverCodexModels({ homeDir: config.homeDir });
+
+    process.stdout.write(`source: ${registry.source}\n`);
+    process.stdout.write(`url:    ${resolveModelsDevUrl()}\n`);
+    process.stdout.write(`count:  ${registry.models.length}\n\n`);
+    const sorted = [...registry.models].sort((a, b) =>
+      a.id.localeCompare(b.id),
+    );
+    for (const model of sorted) {
+      const safe = CHATGPT_ACCOUNT_SAFE_MODELS.has(model.id) ? ' [safe]' : '';
+      process.stdout.write(
+        `${model.id}\tinput=$${model.inputCost.toFixed(2)}\toutput=$${model.outputCost.toFixed(2)}\tctx=${model.contextLimit}${safe}\n`,
+      );
+    }
   },
 });
 
@@ -469,44 +543,47 @@ const main = defineCommand({
     resume: resumeCommand,
     sessions: sessionsCommand,
     auth: authCommand,
+    models: modelsCommand,
     upgrade: upgradeCommand,
     uninstall: uninstallCommand,
   },
 });
 
-const rawArgs = process.argv.slice(2);
-const subCommandNames = new Set(Object.keys(main.subCommands ?? {}));
-const firstPositionalArg = rawArgs.find((arg) => !arg.startsWith('-'));
+if (import.meta.main) {
+  const rawArgs = process.argv.slice(2);
+  const subCommandNames = new Set(Object.keys(main.subCommands ?? {}));
+  const firstPositionalArg = rawArgs.find((arg) => !arg.startsWith('-'));
 
-// Handle --version / -v ourselves. Citty routes --version through consola,
-// whose basic reporter (used on non-TTY stdout, i.e. CI and piped output)
-// prefixes lines with "[log] ". Print the bare version directly so scripts
-// can rely on exact-match comparisons.
-if (
-  rawArgs.length === 1 &&
-  (rawArgs[0] === '--version' || rawArgs[0] === '-v')
-) {
-  process.stdout.write(`${VERSION}\n`);
-  process.exit(0);
-}
+  // Handle --version / -v ourselves. Citty routes --version through consola,
+  // whose basic reporter (used on non-TTY stdout, i.e. CI and piped output)
+  // prefixes lines with "[log] ". Print the bare version directly so scripts
+  // can rely on exact-match comparisons.
+  if (
+    rawArgs.length === 1 &&
+    (rawArgs[0] === '--version' || rawArgs[0] === '-v')
+  ) {
+    process.stdout.write(`${VERSION}\n`);
+    process.exit(0);
+  }
 
-const isMetaInvocation = rawArgs.includes('--help') || rawArgs.includes('-h');
+  const isMetaInvocation = rawArgs.includes('--help') || rawArgs.includes('-h');
 
-const dispatchArgs =
-  isMetaInvocation ||
-  (firstPositionalArg && subCommandNames.has(firstPositionalArg))
-    ? rawArgs
-    : ['chat', ...rawArgs];
+  const dispatchArgs =
+    isMetaInvocation ||
+    (firstPositionalArg && subCommandNames.has(firstPositionalArg))
+      ? rawArgs
+      : ['chat', ...rawArgs];
 
-if (isMetaInvocation) {
-  await runMain(main, { rawArgs: dispatchArgs });
-} else {
-  try {
-    await runCommand(main, { rawArgs: dispatchArgs });
-  } catch (error) {
-    process.stderr.write(
-      `${error instanceof Error ? error.message : String(error)}\n`,
-    );
-    process.exitCode = 1;
+  if (isMetaInvocation) {
+    await runMain(main, { rawArgs: dispatchArgs });
+  } else {
+    try {
+      await runCommand(main, { rawArgs: dispatchArgs });
+    } catch (error) {
+      process.stderr.write(
+        `${error instanceof Error ? error.message : String(error)}\n`,
+      );
+      process.exitCode = 1;
+    }
   }
 }

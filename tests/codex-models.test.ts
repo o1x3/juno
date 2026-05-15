@@ -9,7 +9,9 @@ import {
   pickCodexModel,
   pickCodexModelForChatGptAccount,
   pickDefaultCodexModel,
+  refreshCodexRegistry,
   resetCodexRegistryCache,
+  resolveModelsDevUrl,
 } from '@/core/codex-models';
 
 const SAMPLE_PAYLOAD = {
@@ -155,6 +157,68 @@ describe('discoverCodexModels', () => {
     });
     expect(registry.source).toBe('static');
     expect(registry.models.length).toBeGreaterThan(0);
+  });
+});
+
+describe('resolveModelsDevUrl', () => {
+  test('defaults to https://models.dev/api.json', () => {
+    expect(resolveModelsDevUrl({})).toBe('https://models.dev/api.json');
+  });
+
+  test('JUNO_MODELS_DEV_URL overrides the default', () => {
+    expect(
+      resolveModelsDevUrl({
+        JUNO_MODELS_DEV_URL: 'https://mirror.test/api.json',
+      }),
+    ).toBe('https://mirror.test/api.json');
+  });
+
+  test('whitespace-only override is treated as unset', () => {
+    expect(resolveModelsDevUrl({ JUNO_MODELS_DEV_URL: '   ' })).toBe(
+      'https://models.dev/api.json',
+    );
+  });
+});
+
+describe('refreshCodexRegistry', () => {
+  test('bypasses cache and triggers a fresh fetch', async () => {
+    // Seed an in-TTL cache so a plain discoverCodexModels would return 'cache'.
+    const { mkdir } = await import('node:fs/promises');
+    await mkdir(join(workspace, 'cache'), { recursive: true });
+    await writeFile(
+      join(workspace, 'cache', 'codex-models.json'),
+      JSON.stringify({
+        fetchedAt: 1_000_000,
+        models: [
+          {
+            id: 'cached-only',
+            inputCost: 0.1,
+            outputCost: 0.1,
+            reasoning: false,
+            contextLimit: 1,
+          },
+        ],
+      }),
+    );
+
+    let fetcherCalls = 0;
+    const registry = await refreshCodexRegistry({
+      homeDir: workspace,
+      fetcher: async () => {
+        fetcherCalls += 1;
+        return jsonResponse(SAMPLE_PAYLOAD);
+      },
+      now: () => 1_001_000,
+      ttlMs: 60_000_000, // huge — cache would normally win
+    });
+
+    expect(fetcherCalls).toBe(1);
+    expect(registry.source).toBe('fresh');
+    expect(registry.models.some((m) => m.id === 'cached-only')).toBe(false);
+    expect(registry.models.map((m) => m.id).sort()).toEqual([
+      'gpt-5.1-codex-mini',
+      'gpt-5.3-codex',
+    ]);
   });
 });
 
