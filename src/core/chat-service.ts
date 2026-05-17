@@ -13,6 +13,12 @@ import {
   pickCodexModelForChatGptAccount,
 } from '@/core/codex-models';
 import { createCodexResponsesClient } from '@/core/codex-responses-client';
+import {
+  type CompactionOutcome,
+  compactSession,
+  estimateConversationTokens,
+  shouldCompact,
+} from '@/core/compaction';
 import { loadProjectInstructions } from '@/core/instructions';
 import { availableLspServerIds } from '@/core/lsp';
 import { createAiSdkModelClient } from '@/core/model-client';
@@ -79,6 +85,7 @@ type ChatOptions = {
   exaApiKey?: string;
   fetchImpl?: typeof fetch;
   mcpTools?: ToolSpec[];
+  onCompacted?: (outcome: CompactionOutcome) => void;
 };
 
 const SUMMARIZE_SYSTEM_PROMPT =
@@ -237,7 +244,7 @@ export async function startOrResumeChat(
   const events = options.sessionId
     ? await readSessionEvents(config.sessionsDir, sessionId)
     : [];
-  const messages = restoreMessages(events);
+  let messages = restoreMessages(events);
   const existingName = findSessionName(events);
   if (existingName) options.onSessionName?.(existingName);
 
@@ -272,6 +279,39 @@ export async function startOrResumeChat(
       ? routing.activeModel
       : config.namingModel;
   const summarize = buildSummarizeFn(routing.modelClient, summarizeModel);
+
+  // Auto-compaction: before running the turn, if the restored context is too
+  // large for the window, fold older turns into a checkpoint summary and
+  // continue on the smaller context. Best-effort — a failure leaves the
+  // session untouched and the turn proceeds normally.
+  if (
+    !isFreshSession &&
+    config.autoCompact &&
+    shouldCompact(
+      estimateConversationTokens(messages),
+      config.contextWindow,
+      config.compactReserveTokens,
+    )
+  ) {
+    try {
+      const outcome = await compactSession({
+        sessionsDir: config.sessionsDir,
+        sessionId,
+        modelClient: routing.modelClient,
+        model: summarizeModel,
+        keepRecentTokens: config.compactKeepRecentTokens,
+        force: false,
+        buildMessages: restoreMessages,
+      });
+      if (outcome.compacted) {
+        const fresh = await readSessionEvents(config.sessionsDir, sessionId);
+        messages = restoreMessages(fresh);
+        options.onCompacted?.(outcome);
+      }
+    } catch {
+      // ignore — compaction is advisory
+    }
+  }
 
   const agents = await loadAgents(config.cwd);
   const skills = await loadSkills(config.cwd, config.homeDir);
@@ -427,6 +467,39 @@ export async function startOrResumeChat(
       modelFallback: routing.modelFallback,
     },
   };
+}
+
+/**
+ * Manually compact a session (the `/compact` command / `juno compact`).
+ * Resolves the same routing as a turn so the summary uses the right client,
+ * and forces compaction even when the context is under the auto threshold.
+ */
+export async function compactActiveSession(
+  config: AgentConfig,
+  sessionId: string,
+  opts: { modelClient?: ModelClient } = {},
+): Promise<CompactionOutcome> {
+  const routing: RoutingResolution = opts.modelClient
+    ? {
+        runtimeConfig: config,
+        modelClient: opts.modelClient,
+        authMode: 'api-key',
+        activeModel: config.model,
+      }
+    : await resolveRouting(config);
+  const summarizeModel =
+    routing.authMode === 'oauth-codex'
+      ? routing.activeModel
+      : config.namingModel;
+  return compactSession({
+    sessionsDir: config.sessionsDir,
+    sessionId,
+    modelClient: routing.modelClient,
+    model: summarizeModel,
+    keepRecentTokens: config.compactKeepRecentTokens,
+    force: true,
+    buildMessages: restoreMessages,
+  });
 }
 
 export async function resolveAuthSummary(

@@ -7,7 +7,11 @@ import {
   loadApprovalAllowlist,
   saveApprovalAllowlist,
 } from '@/core/approvals';
-import { resolveAuthSummary, startOrResumeChat } from '@/core/chat-service';
+import {
+  compactActiveSession,
+  resolveAuthSummary,
+  startOrResumeChat,
+} from '@/core/chat-service';
 import { type ConfigFile, saveConfig } from '@/core/config';
 import { connectMcpServers, loadMcpConfig, type McpRegistry } from '@/core/mcp';
 import {
@@ -966,6 +970,53 @@ export function ChatApp({
             kind: 'plan-note',
             text: `↩ undid last turn — workspace restored to the pre-turn snapshot, ${res.removedEvents} session event(s) dropped.`,
           });
+          return;
+        }
+        case 'compact': {
+          if (!activeSessionId) {
+            appendCell({
+              id: `cp-${crypto.randomUUID()}`,
+              kind: 'plan-note',
+              text: 'nothing to compact yet — no turn has run in this session.',
+            });
+            return;
+          }
+          appendCell({
+            id: `cp-${crypto.randomUUID()}`,
+            kind: 'plan-note',
+            text: '↻ compacting context…',
+          });
+          try {
+            const outcome = await compactActiveSession(config, activeSessionId);
+            if (!outcome.compacted) {
+              appendCell({
+                id: `cp-${crypto.randomUUID()}`,
+                kind: 'plan-note',
+                text: `/compact: ${outcome.reason}`,
+              });
+              return;
+            }
+            const fresh = await readSessionEvents(
+              config.sessionsDir,
+              activeSessionId,
+            );
+            setCells(cellsFromEvents(fresh));
+            setCurrentPlan(findLatestPlan(fresh) ?? []);
+            setUnreadCount(0);
+            setScrollOffset(0);
+            appendCell({
+              id: `cp-${crypto.randomUUID()}`,
+              kind: 'plan-note',
+              text: `↻ context compacted — ${outcome.messagesSummarized} messages summarized (~${outcome.tokensBefore} tokens).`,
+            });
+          } catch (error) {
+            appendCell({
+              id: `cp-${crypto.randomUUID()}`,
+              kind: 'error',
+              title: 'compaction failed',
+              detail: error instanceof Error ? error.message : String(error),
+            });
+          }
           return;
         }
         case 'copy': {
