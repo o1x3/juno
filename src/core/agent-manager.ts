@@ -394,8 +394,8 @@ export function createMultiAgentTools(
     name: 'spawn_agent',
     description:
       version === 'v2'
-        ? `Spawn a sub-agent on a well-scoped task. Provide a task_name (lowercase letters, digits, underscores) and the message. The agent runs in the background with its own context; its final answer is returned when it finishes. Available agent_type: ${typeList}. Only use when the user asked for delegation or parallel agent work.`
-        : `Spawn a sub-agent for a well-scoped task. Returns the spawned agent id. The agent runs in the background; use wait_agent to collect its result. Available agent_type: ${typeList}. Only use when the user asked for delegation or parallel agent work.`,
+        ? `Spawn a sub-agent on a well-scoped task. Provide a task_name (lowercase letters, digits, underscores) and the message. The agent runs in the background with its own context. Agents live for THIS turn only — spawn, do other work, then call wait_agent and act on the result before you finish; do not end your turn expecting to resume the agent later. Available agent_type: ${typeList}. Only use when the user asked for delegation or parallel agent work.`
+        : `Spawn a sub-agent for a well-scoped task. Returns the spawned agent id. The agent runs in the background. Agents live for THIS turn only — spawn, do other work, then call wait_agent and act on the result before you finish; do not end your turn expecting to resume the agent later. Available agent_type: ${typeList}. Only use when the user asked for delegation or parallel agent work.`,
     inputSchema: spawnSchema,
     execute: async (input) => {
       const id = cid(input);
