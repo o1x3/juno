@@ -198,14 +198,22 @@ export function buildCodexInput(
 
 export function buildCodexTools(specs: ToolSpec[]): CodexToolDef[] {
   return specs.map((spec) => {
-    const schema = spec.inputSchema as z.ZodType;
-    const json = z.toJSONSchema(schema) as Record<string, unknown>;
-    delete json.$schema;
+    let parameters: Record<string, unknown>;
+    if (spec.parameters) {
+      // MCP tools ship their own JSON Schema; pass through unchanged.
+      parameters = { ...spec.parameters };
+      delete parameters.$schema;
+    } else {
+      const schema = spec.inputSchema as z.ZodType;
+      const json = z.toJSONSchema(schema) as Record<string, unknown>;
+      delete json.$schema;
+      parameters = json;
+    }
     return {
       type: 'function' as const,
       name: spec.name,
       description: spec.description,
-      parameters: json,
+      parameters,
       strict: false,
     };
   });
@@ -375,7 +383,7 @@ export function createCodexResponsesClient(
         body.tools = buildCodexTools(tools);
       }
 
-      const validToolNames = new Set<ToolName>(tools.map((t) => t.name));
+      const validToolNames = new Set<string>(tools.map((t) => t.name));
 
       const headers = buildCodexHeaders({ ...config, accountId });
       const url = resolveCodexUrl(config.baseUrl);
@@ -457,7 +465,7 @@ export function createCodexResponsesClient(
               asString(item.id) ??
               '';
             const argsText = asString(item.arguments) ?? entry?.args ?? '';
-            const toolName = validToolNames.has(name as ToolName)
+            const toolName = validToolNames.has(name)
               ? (name as ToolName)
               : undefined;
             if (!toolName && name) {

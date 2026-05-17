@@ -85,7 +85,7 @@ export type ToolResult = {
   isError?: boolean;
 };
 
-export type ToolName =
+export type BuiltinToolName =
   | 'Read'
   | 'Write'
   | 'Edit'
@@ -95,7 +95,13 @@ export type ToolName =
   | 'Glob'
   | 'LS'
   | 'TodoWrite'
-  | 'AskUserQuestion';
+  | 'AskUserQuestion'
+  | 'WebFetch'
+  | 'WebSearch';
+
+// `(string & {})` keeps IntelliSense for the literal builtins while letting
+// MCP tools (named `<server>_<tool>`) flow through the type system at runtime.
+export type ToolName = BuiltinToolName | (string & {});
 
 export type ApprovalPreview =
   | {
@@ -107,7 +113,13 @@ export type ApprovalPreview =
     }
   | { kind: 'edit'; path: string; diff?: DiffPayload }
   | { kind: 'multi-edit'; path: string; created: boolean; diff?: DiffPayload }
-  | { kind: 'bash'; command: string };
+  | { kind: 'bash'; command: string }
+  | {
+      kind: 'mcp';
+      server: string;
+      tool: string;
+      args: Record<string, unknown>;
+    };
 
 export type ApprovalRequest = {
   toolName: ToolName;
@@ -143,7 +155,11 @@ export type QuestionResponse =
 export type ToolSpec = {
   name: ToolName;
   description: string;
+  // Static `inputSchema` for built-in tools; MCP tools may supply `parameters`
+  // (raw JSON Schema returned by the server) instead. When both are present,
+  // `parameters` wins for outbound tool-definition serialization.
   inputSchema: ZodType;
+  parameters?: Record<string, unknown>;
   execute: (
     input: Record<string, unknown>,
     context: ToolContext,
@@ -223,6 +239,8 @@ export type AgentConfig = {
   autoUpgrade: boolean;
   updateCheckEnabled: boolean;
   yoloAcknowledged: boolean;
+  exaApiKey?: string;
+  mcpConfigPath?: string;
 };
 
 export type AuthMode = 'api-key' | 'oauth-api-key' | 'oauth-codex' | 'none';

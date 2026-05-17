@@ -1,6 +1,6 @@
 import { createOpenAI } from '@ai-sdk/openai';
 import type { ModelMessage } from 'ai';
-import { tool as defineTool, streamText } from 'ai';
+import { tool as defineTool, jsonSchema, streamText } from 'ai';
 
 import type {
   AgentConfig,
@@ -117,7 +117,9 @@ export function createAiSdkModelClient(config: AgentConfig): ModelClient {
           spec.name,
           defineTool({
             description: spec.description,
-            inputSchema: spec.inputSchema,
+            inputSchema: spec.parameters
+              ? jsonSchema(spec.parameters)
+              : spec.inputSchema,
           }),
         ]),
       );

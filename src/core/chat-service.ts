@@ -51,6 +51,8 @@ export const PLAN_MODE_TOOLS: ReadonlySet<ToolName> = new Set([
   'LS',
   'TodoWrite',
   'AskUserQuestion',
+  'WebFetch',
+  'WebSearch',
 ]);
 
 type ChatOptions = {
@@ -67,7 +69,37 @@ type ChatOptions = {
   namingDeps?: NamingDeps;
   requestApproval?: (req: ApprovalRequest) => Promise<ApprovalDecision>;
   requestUserAnswer?: (req: QuestionRequest) => Promise<QuestionResponse>;
+  exaApiKey?: string;
+  fetchImpl?: typeof fetch;
+  mcpTools?: ToolSpec[];
 };
+
+const SUMMARIZE_SYSTEM_PROMPT =
+  'You summarize a web page for an LLM. Extract only the content that answers the user prompt. Be concise and faithful to the source. Output plain text only — no preamble, no markdown headers, no bullet glyphs.';
+
+function buildSummarizeFn(
+  client: ModelClient,
+  model: string,
+): (input: {
+  prompt: string;
+  content: string;
+  url: string;
+}) => Promise<string> {
+  return async ({ prompt, content, url }) => {
+    const trimmed =
+      content.length > 60_000
+        ? `${content.slice(0, 60_000)}\n…[truncated]`
+        : content;
+    const userText = `URL: ${url}\nUser prompt: ${prompt}\n\n--- PAGE CONTENT ---\n${trimmed}`;
+    const step = await client.runStep({
+      model,
+      systemPrompt: SUMMARIZE_SYSTEM_PROMPT,
+      messages: [{ role: 'user', content: userText }],
+      tools: [],
+    });
+    return step.text.trim();
+  };
+}
 
 type RoutingResolution = {
   runtimeConfig: AgentConfig;
@@ -225,14 +257,30 @@ export async function startOrResumeChat(
 
   const instructions = await loadProjectInstructions(config.cwd);
   const systemPrompt = buildSystemPrompt(instructions, mode);
-  const allTools = createBuiltinTools({
-    cwd: routing.runtimeConfig.cwd,
-    outputLimit: routing.runtimeConfig.toolOutputLimit,
-    readLineLimit: routing.runtimeConfig.readLineLimit,
-    bashTimeoutMs: routing.runtimeConfig.bashTimeoutMs,
-    sessionsDir: routing.runtimeConfig.sessionsDir,
-    sessionId,
-  });
+  // Summarize model: API-key paths use the cheap namingModel; OAuth-codex
+  // routes have to stay on the resolved activeModel because the picker has
+  // already filtered to ChatGPT-account-safe choices.
+  const summarizeModel =
+    routing.authMode === 'oauth-codex'
+      ? routing.activeModel
+      : config.namingModel;
+  const summarize = buildSummarizeFn(routing.modelClient, summarizeModel);
+  const allTools = createBuiltinTools(
+    {
+      cwd: routing.runtimeConfig.cwd,
+      outputLimit: routing.runtimeConfig.toolOutputLimit,
+      readLineLimit: routing.runtimeConfig.readLineLimit,
+      bashTimeoutMs: routing.runtimeConfig.bashTimeoutMs,
+      sessionsDir: routing.runtimeConfig.sessionsDir,
+      sessionId,
+    },
+    {
+      fetchImpl: options.fetchImpl,
+      summarize,
+      exaApiKey: options.exaApiKey ?? config.exaApiKey,
+      mcpTools: options.mcpTools,
+    },
+  );
   const tools = filterToolsForMode(allTools, mode);
 
   const result = await runAgentTurn({

@@ -238,6 +238,8 @@ export function resolveConfig(overrides: ConfigOverrides = {}): AgentConfig {
       ? false
       : (fileConfig.updateCheckEnabled ?? true);
   const yoloAcknowledged = fileConfig.yoloAcknowledged ?? false;
+  const exaApiKey = process.env.EXA_API_KEY ?? undefined;
+  const mcpConfigPath = process.env.JUNO_MCP_CONFIG ?? undefined;
 
   return {
     cwd,
@@ -263,6 +265,8 @@ export function resolveConfig(overrides: ConfigOverrides = {}): AgentConfig {
     autoUpgrade,
     updateCheckEnabled,
     yoloAcknowledged,
+    exaApiKey,
+    mcpConfigPath,
   };
 }
 
