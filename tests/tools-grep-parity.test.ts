@@ -6,6 +6,11 @@ import { join } from 'node:path';
 import { createBuiltinTools } from '@/core/tools';
 import type { ToolContext, ToolSpec } from '@/types';
 
+// The Grep tool shells out to ripgrep. Behavior tests need `rg`; skip them
+// where it is absent (CI installs it so the real behavior is still exercised).
+const HAS_RG = Boolean(Bun.which('rg'));
+const testRg = test.skipIf(!HAS_RG);
+
 let workspace = '';
 
 afterEach(async () => {
@@ -55,7 +60,7 @@ async function seed() {
 }
 
 describe('Grep parity (pi-mono / Claude-rich flags)', () => {
-  test('content mode returns file:line:text with line numbers', async () => {
+  testRg('content mode returns file:line:text with line numbers', async () => {
     await seed();
     const r = await grep().execute({ pattern: 'Foo', toolCallId: '1' }, ctx());
     const o = r.output as GrepOut;
@@ -65,7 +70,7 @@ describe('Grep parity (pi-mono / Claude-rich flags)', () => {
     expect(o.matchCount).toBeGreaterThanOrEqual(3);
   });
 
-  test('ignoreCase widens the match', async () => {
+  testRg('ignoreCase widens the match', async () => {
     await seed();
     const sensitive = (
       await grep().execute({ pattern: 'foo', toolCallId: '1' }, ctx())
@@ -79,7 +84,7 @@ describe('Grep parity (pi-mono / Claude-rich flags)', () => {
     expect(insensitive.matchCount).toBeGreaterThan(sensitive.matchCount);
   });
 
-  test('literal treats regex metacharacters as text', async () => {
+  testRg('literal treats regex metacharacters as text', async () => {
     await seed();
     await writeFile(join(workspace, 'src', 'c.ts'), 'a.b.c = 1\naxbxc = 2\n');
     const asRegex = (
@@ -98,7 +103,7 @@ describe('Grep parity (pi-mono / Claude-rich flags)', () => {
     expect(asLiteral.matchCount).toBe(1); // only a.b.c
   });
 
-  test('glob / include filter the file set', async () => {
+  testRg('glob / include filter the file set', async () => {
     await seed();
     const tsOnly = (
       await grep().execute(
@@ -111,7 +116,7 @@ describe('Grep parity (pi-mono / Claude-rich flags)', () => {
     expect(tsOnly.stdout).not.toContain('readme.md');
   });
 
-  test('output_mode files_with_matches lists files only', async () => {
+  testRg('output_mode files_with_matches lists files only', async () => {
     await seed();
     const r = await grep().execute(
       { pattern: 'Foo', output_mode: 'files_with_matches', toolCallId: '1' },
@@ -123,7 +128,7 @@ describe('Grep parity (pi-mono / Claude-rich flags)', () => {
     expect(o.stdout).not.toContain(':1:');
   });
 
-  test('output_mode count returns per-file counts', async () => {
+  testRg('output_mode count returns per-file counts', async () => {
     await seed();
     const r = await grep().execute(
       { pattern: 'Foo', output_mode: 'count', toolCallId: '1' },
@@ -134,7 +139,7 @@ describe('Grep parity (pi-mono / Claude-rich flags)', () => {
     expect(o.stdout).toMatch(/a\.ts:\d/);
   });
 
-  test('context adds surrounding lines', async () => {
+  testRg('context adds surrounding lines', async () => {
     await seed();
     const r = await grep().execute(
       { pattern: 'TODO', context: 1, toolCallId: '1' },
@@ -145,7 +150,7 @@ describe('Grep parity (pi-mono / Claude-rich flags)', () => {
     expect(o.stdout).toContain('const foo = 2;');
   });
 
-  test('limit caps the result set and flags truncation', async () => {
+  testRg('limit caps the result set and flags truncation', async () => {
     workspace = await mkdtemp(join(tmpdir(), 'juno-grep-lim-'));
     const lines = Array.from({ length: 20 }, (_, i) => `match ${i}`).join('\n');
     await writeFile(join(workspace, 'big.txt'), lines);
@@ -158,7 +163,7 @@ describe('Grep parity (pi-mono / Claude-rich flags)', () => {
     expect(o.stdout.split('\n').length).toBe(5);
   });
 
-  test('no matches → exitCode 1, not an error', async () => {
+  testRg('no matches → exitCode 1, not an error', async () => {
     await seed();
     const r = await grep().execute(
       { pattern: 'zzz-not-here', toolCallId: '1' },
@@ -167,5 +172,21 @@ describe('Grep parity (pi-mono / Claude-rich flags)', () => {
     expect(r.isError).toBeUndefined();
     expect((r.output as GrepOut).exitCode).toBe(1);
     expect((r.output as GrepOut).matchCount).toBe(0);
+  });
+});
+
+describe('Grep without ripgrep', () => {
+  test('returns a clear, actionable error when rg is not on PATH', async () => {
+    workspace = await mkdtemp(join(tmpdir(), 'juno-grep-norg-'));
+    const tool = createBuiltinTools(ctx(), {
+      which: () => false,
+    }).find((x) => x.name === 'Grep') as ToolSpec;
+    const r = await tool.execute(
+      { pattern: 'anything', toolCallId: '1' },
+      ctx(),
+    );
+    expect(r.isError).toBe(true);
+    expect(String(r.output)).toContain('ripgrep');
+    expect(String(r.output)).toContain('not on PATH');
   });
 });

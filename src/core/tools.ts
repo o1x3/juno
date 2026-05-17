@@ -72,6 +72,9 @@ export type ToolDeps = {
   skills?: SkillDefinition[];
   lspServerIds?: Set<string>;
   lspConnect?: LspConnect;
+  // Resolves an executable on PATH (defaults to Bun.which). Injectable so the
+  // missing-ripgrep path is deterministically testable.
+  which?: (command: string) => boolean;
 };
 
 async function requireApproval(
@@ -1229,6 +1232,15 @@ export function createBuiltinTools(
       execute: async (input) => {
         const toolCallId = String(input.toolCallId ?? crypto.randomUUID());
         try {
+          const whichImpl =
+            deps.which ?? ((c: string) => Boolean(Bun.which(c)));
+          if (!whichImpl('rg')) {
+            return fail(
+              toolCallId,
+              'Grep',
+              'ripgrep (`rg`) is not installed or not on PATH. Install it (e.g. `brew install ripgrep` / `apt-get install ripgrep`) or use Bash with `grep`/`git grep` instead.',
+            );
+          }
           const mode =
             input.output_mode === 'files_with_matches' ||
             input.output_mode === 'count'
