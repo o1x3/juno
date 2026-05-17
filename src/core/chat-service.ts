@@ -7,12 +7,20 @@ import {
   resolveCredential,
 } from '@/auth/storage';
 import { runAgentTurn } from '@/core/agent-loop';
+import { AgentManager } from '@/core/agent-manager';
 import { loadAgents, resolveAgentTools } from '@/core/agents';
 import {
   discoverCodexModels,
   pickCodexModelForChatGptAccount,
 } from '@/core/codex-models';
 import { createCodexResponsesClient } from '@/core/codex-responses-client';
+import {
+  type CompactionOutcome,
+  compactSession,
+  estimateConversationTokens,
+  shouldCompact,
+} from '@/core/compaction';
+import { createHookRunner, loadHooks } from '@/core/hooks';
 import { loadProjectInstructions } from '@/core/instructions';
 import { availableLspServerIds } from '@/core/lsp';
 import { createAiSdkModelClient } from '@/core/model-client';
@@ -27,6 +35,7 @@ import {
   restoreMessages,
 } from '@/core/session-store';
 import { loadSkills } from '@/core/skills';
+import { SnapshotStore } from '@/core/snapshot';
 import { createBuiltinTools } from '@/core/tools';
 import type {
   AgentConfig,
@@ -78,6 +87,7 @@ type ChatOptions = {
   exaApiKey?: string;
   fetchImpl?: typeof fetch;
   mcpTools?: ToolSpec[];
+  onCompacted?: (outcome: CompactionOutcome) => void;
 };
 
 const SUMMARIZE_SYSTEM_PROMPT =
@@ -236,7 +246,7 @@ export async function startOrResumeChat(
   const events = options.sessionId
     ? await readSessionEvents(config.sessionsDir, sessionId)
     : [];
-  const messages = restoreMessages(events);
+  let messages = restoreMessages(events);
   const existingName = findSessionName(events);
   if (existingName) options.onSessionName?.(existingName);
 
@@ -271,6 +281,45 @@ export async function startOrResumeChat(
       ? routing.activeModel
       : config.namingModel;
   const summarize = buildSummarizeFn(routing.modelClient, summarizeModel);
+
+  const hookRunner = createHookRunner({
+    hooks: loadHooks({ configFile: config.configFile, cwd: config.cwd }),
+    sessionId,
+    cwd: config.cwd,
+  });
+
+  // Auto-compaction: before running the turn, if the restored context is too
+  // large for the window, fold older turns into a checkpoint summary and
+  // continue on the smaller context. Best-effort — a failure leaves the
+  // session untouched and the turn proceeds normally.
+  if (
+    !isFreshSession &&
+    config.autoCompact &&
+    shouldCompact(
+      estimateConversationTokens(messages),
+      config.contextWindow,
+      config.compactReserveTokens,
+    )
+  ) {
+    try {
+      const outcome = await compactSession({
+        sessionsDir: config.sessionsDir,
+        sessionId,
+        modelClient: routing.modelClient,
+        model: summarizeModel,
+        keepRecentTokens: config.compactKeepRecentTokens,
+        force: false,
+        buildMessages: restoreMessages,
+      });
+      if (outcome.compacted) {
+        const fresh = await readSessionEvents(config.sessionsDir, sessionId);
+        messages = restoreMessages(fresh);
+        options.onCompacted?.(outcome);
+      }
+    } catch {
+      // ignore — compaction is advisory
+    }
+  }
 
   const agents = await loadAgents(config.cwd);
   const skills = await loadSkills(config.cwd, config.homeDir);
@@ -342,6 +391,7 @@ export async function startOrResumeChat(
       modelClient: routing.modelClient,
       requestApproval: options.requestApproval,
       requestUserAnswer: options.requestUserAnswer,
+      hooks: hookRunner,
     });
     return {
       taskId: childSessionId,
@@ -349,6 +399,69 @@ export async function startOrResumeChat(
       toolCalls: childResult.toolCalls.length,
     };
   };
+
+  // Stateful multi-agent registry (spawn_agent / send_input / wait_agent /
+  // close_agent / list_agents). Each agent is a background turn with its own
+  // persisted history; it reuses the sub-agent tool sandbox (no agentManager
+  // in childDeps → cannot recurse).
+  const agentManager = config.multiAgent
+    ? new AgentManager({
+        resolveAgentDef: (type) => agents.find((a) => a.name === type),
+        executor: async ({ agentDef, history, prompt, model, agentId }) => {
+          const childSessionId = `${sessionId}.${agentId}`;
+          const childModel =
+            model && routing.authMode !== 'oauth-codex'
+              ? model
+              : agentDef.model && routing.authMode !== 'oauth-codex'
+                ? agentDef.model
+                : routing.activeModel;
+          const childCtx = {
+            cwd: routing.runtimeConfig.cwd,
+            outputLimit: routing.runtimeConfig.toolOutputLimit,
+            readLineLimit: routing.runtimeConfig.readLineLimit,
+            bashTimeoutMs: routing.runtimeConfig.bashTimeoutMs,
+            sessionsDir: routing.runtimeConfig.sessionsDir,
+            sessionId: childSessionId,
+          };
+          const childAllTools = createBuiltinTools(childCtx, subAgentDeps);
+          const allowed = new Set(
+            resolveAgentTools(
+              agentDef,
+              childAllTools.map((t) => String(t.name)),
+            ),
+          );
+          const childTools = childAllTools.filter((t) =>
+            allowed.has(String(t.name)),
+          );
+          const childSystemPrompt = [
+            agentDef.prompt,
+            instructions.mergedContent
+              ? `Project instructions:\n${instructions.mergedContent}`
+              : '',
+          ]
+            .filter((s) => s.length > 0)
+            .join('\n\n');
+          const childResult = await runAgentTurn({
+            config: { ...routing.runtimeConfig, model: childModel },
+            sessionId: childSessionId,
+            model: childModel,
+            systemPrompt: childSystemPrompt,
+            userInput: prompt,
+            messages: history,
+            tools: childTools,
+            modelClient: routing.modelClient,
+            requestApproval: options.requestApproval,
+            requestUserAnswer: options.requestUserAnswer,
+            hooks: hookRunner,
+          });
+          return {
+            text: childResult.assistantText,
+            history: childResult.messages,
+            toolCalls: childResult.toolCalls.length,
+          };
+        },
+      })
+    : undefined;
 
   const allTools = createBuiltinTools(
     {
@@ -360,6 +473,8 @@ export async function startOrResumeChat(
       sessionId,
     },
     {
+      agentManager,
+      multiAgentVersion: config.multiAgentVersion,
       fetchImpl: options.fetchImpl,
       summarize,
       exaApiKey: options.exaApiKey ?? config.exaApiKey,
@@ -371,6 +486,11 @@ export async function startOrResumeChat(
     },
   );
   const tools = filterToolsForMode(allTools, mode);
+
+  const snapshotStore =
+    config.snapshots && (await SnapshotStore.enabled(config.cwd))
+      ? new SnapshotStore({ cwd: config.cwd, homeDir: config.homeDir })
+      : undefined;
 
   const result = await runAgentTurn({
     config: routing.runtimeConfig,
@@ -387,6 +507,8 @@ export async function startOrResumeChat(
     onUsage: options.onUsage,
     requestApproval: options.requestApproval,
     requestUserAnswer: options.requestUserAnswer,
+    snapshot: snapshotStore,
+    hooks: hookRunner,
   });
 
   if (isFreshSession && config.autoName && !existingName) {
@@ -420,6 +542,39 @@ export async function startOrResumeChat(
       modelFallback: routing.modelFallback,
     },
   };
+}
+
+/**
+ * Manually compact a session (the `/compact` command / `juno compact`).
+ * Resolves the same routing as a turn so the summary uses the right client,
+ * and forces compaction even when the context is under the auto threshold.
+ */
+export async function compactActiveSession(
+  config: AgentConfig,
+  sessionId: string,
+  opts: { modelClient?: ModelClient } = {},
+): Promise<CompactionOutcome> {
+  const routing: RoutingResolution = opts.modelClient
+    ? {
+        runtimeConfig: config,
+        modelClient: opts.modelClient,
+        authMode: 'api-key',
+        activeModel: config.model,
+      }
+    : await resolveRouting(config);
+  const summarizeModel =
+    routing.authMode === 'oauth-codex'
+      ? routing.activeModel
+      : config.namingModel;
+  return compactSession({
+    sessionsDir: config.sessionsDir,
+    sessionId,
+    modelClient: routing.modelClient,
+    model: summarizeModel,
+    keepRecentTokens: config.compactKeepRecentTokens,
+    force: true,
+    buildMessages: restoreMessages,
+  });
 }
 
 export async function resolveAuthSummary(

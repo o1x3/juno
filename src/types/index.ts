@@ -61,6 +61,19 @@ export type SessionEvent =
       type: 'todo_update';
       timestamp: string;
       todos: TodoItem[];
+    }
+  | {
+      type: 'snapshot';
+      timestamp: string;
+      sessionId: string;
+      hash: string;
+    }
+  | {
+      type: 'compaction';
+      timestamp: string;
+      summary: string;
+      tokensBefore: number;
+      messagesSummarized: number;
     };
 
 export type TodoStatus = 'pending' | 'in_progress' | 'completed';
@@ -103,7 +116,12 @@ export type BuiltinToolName =
   | 'LSP'
   | 'view_image'
   | 'WebFetch'
-  | 'WebSearch';
+  | 'WebSearch'
+  | 'spawn_agent'
+  | 'send_input'
+  | 'wait_agent'
+  | 'close_agent'
+  | 'list_agents';
 
 // Optional multimodal payload on a tool result. When present, the model-client
 // layer serializes it into the provider's native image input so a vision model
@@ -268,7 +286,36 @@ export type AgentConfig = {
   yoloAcknowledged: boolean;
   exaApiKey?: string;
   mcpConfigPath?: string;
+  // Per-turn git snapshots for `/undo`. Auto-disabled outside a git repo.
+  snapshots: boolean;
+  // Context compaction.
+  autoCompact: boolean;
+  contextWindow: number;
+  compactReserveTokens: number;
+  compactKeepRecentTokens: number;
+  // Multi-agent (spawn_agent / send_input / wait_agent / close_agent).
+  multiAgent: boolean;
+  multiAgentVersion: 'v1' | 'v2';
 };
+
+export type HookEvent =
+  | 'PreToolUse'
+  | 'PostToolUse'
+  | 'UserPromptSubmit'
+  | 'Stop';
+
+export type HookCommand = {
+  type: 'command';
+  command: string;
+  timeout?: number;
+};
+
+export type HookMatcher = {
+  matcher?: string;
+  hooks: HookCommand[];
+};
+
+export type HookConfig = Partial<Record<HookEvent, HookMatcher[]>>;
 
 export type AuthMode = 'api-key' | 'oauth-api-key' | 'oauth-codex' | 'none';
 

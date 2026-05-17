@@ -103,7 +103,16 @@ export function restoreMessages(events: SessionEvent[]): SerializedMessage[] {
   };
 
   for (const event of events) {
-    if (event.type === 'user_message') {
+    if (event.type === 'compaction') {
+      // Everything before the marker is replaced by the checkpoint summary;
+      // events after it replay normally on top.
+      messages.length = 0;
+      pendingNames.clear();
+      messages.push({
+        role: 'user',
+        content: `[Earlier conversation compacted to a checkpoint]\n\n${event.summary}`,
+      });
+    } else if (event.type === 'user_message') {
       flushPending();
       messages.push(event.message);
     } else if (event.type === 'assistant_message') {

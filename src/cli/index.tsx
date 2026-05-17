@@ -9,6 +9,7 @@ import {
 } from '@/auth/codex';
 import { clearCredential, saveCredential } from '@/auth/storage';
 import {
+  compactActiveSession,
   createStoredApiCredential,
   resolveAuthStatus,
   startOrResumeChat,
@@ -22,6 +23,7 @@ import {
 import { resolveConfig } from '@/core/config';
 import { connectMcpServers, loadMcpConfig } from '@/core/mcp';
 import { listSessions } from '@/core/session-store';
+import { undoLastTurn } from '@/core/undo';
 import {
   performUninstall,
   removePathBlockFromShellRcs,
@@ -298,6 +300,83 @@ const resumeCommand = defineCommand({
   },
 });
 
+const undoCommand = defineCommand({
+  meta: {
+    name: 'undo',
+    description:
+      'Revert the last turn: restore the workspace to the pre-turn snapshot and drop that turn from the session.',
+  },
+  args: {
+    sessionId: {
+      type: 'positional',
+      required: false,
+    },
+  },
+  async run({ args }) {
+    const config = resolveConfig();
+    let sessionId = args.sessionId ? String(args.sessionId) : undefined;
+    if (!sessionId) {
+      const sessions = await listSessions(config.sessionsDir);
+      sessionId = sessions[0]?.id;
+    }
+    if (!sessionId) {
+      process.stderr.write('no sessions to undo\n');
+      process.exitCode = 1;
+      return;
+    }
+    const res = await undoLastTurn({
+      cwd: config.cwd,
+      homeDir: config.homeDir,
+      sessionsDir: config.sessionsDir,
+      sessionId,
+    });
+    if (!res.undone) {
+      process.stderr.write(`undo failed: ${res.reason}\n`);
+      process.exitCode = 1;
+      return;
+    }
+    process.stdout.write(
+      `undid last turn of ${sessionId}: workspace restored, ${res.removedEvents} event(s) dropped\n`,
+    );
+  },
+});
+
+const compactCommand = defineCommand({
+  meta: {
+    name: 'compact',
+    description:
+      'Summarize older turns of a session into a checkpoint and keep only the recent tail.',
+  },
+  args: {
+    sessionId: {
+      type: 'positional',
+      required: false,
+    },
+  },
+  async run({ args }) {
+    const config = resolveConfig();
+    let sessionId = args.sessionId ? String(args.sessionId) : undefined;
+    if (!sessionId) {
+      const sessions = await listSessions(config.sessionsDir);
+      sessionId = sessions[0]?.id;
+    }
+    if (!sessionId) {
+      process.stderr.write('no sessions to compact\n');
+      process.exitCode = 1;
+      return;
+    }
+    const outcome = await compactActiveSession(config, sessionId);
+    if (!outcome.compacted) {
+      process.stderr.write(`compaction skipped: ${outcome.reason}\n`);
+      process.exitCode = 1;
+      return;
+    }
+    process.stdout.write(
+      `compacted ${sessionId}: ${outcome.messagesSummarized} messages summarized (~${outcome.tokensBefore} tokens)\n`,
+    );
+  },
+});
+
 const sessionsCommand = defineCommand({
   meta: {
     name: 'sessions',
@@ -570,6 +649,8 @@ const main = defineCommand({
     login: loginCommand,
     logout: logoutCommand,
     resume: resumeCommand,
+    undo: undoCommand,
+    compact: compactCommand,
     sessions: sessionsCommand,
     auth: authCommand,
     models: modelsCommand,

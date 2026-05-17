@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 
 import { z } from 'zod';
 
-import type { AgentConfig, UiPreferences } from '@/types';
+import type { AgentConfig, HookConfig, UiPreferences } from '@/types';
 
 const DEFAULT_HOME_DIR = join(homedir(), '.juno');
 const DEFAULT_CONFIG_FILE = 'config.json';
@@ -19,6 +19,30 @@ const uiSchema = z
     statusPaneShortcut: z.string().trim().min(1).optional(),
     theme: z.enum(['auto', 'dark', 'light']).optional(),
     timestamps: z.boolean().optional(),
+  })
+  .strict();
+
+const hookCommandSchema = z
+  .object({
+    type: z.literal('command'),
+    command: z.string().trim().min(1),
+    timeout: z.number().int().positive().finite().optional(),
+  })
+  .strict();
+
+const hookMatcherSchema = z
+  .object({
+    matcher: z.string().optional(),
+    hooks: z.array(hookCommandSchema).min(1),
+  })
+  .strict();
+
+export const hookConfigSchema = z
+  .object({
+    PreToolUse: z.array(hookMatcherSchema).optional(),
+    PostToolUse: z.array(hookMatcherSchema).optional(),
+    UserPromptSubmit: z.array(hookMatcherSchema).optional(),
+    Stop: z.array(hookMatcherSchema).optional(),
   })
   .strict();
 
@@ -39,6 +63,14 @@ export const configFileSchema = z
     autoUpgrade: z.boolean().optional(),
     updateCheckEnabled: z.boolean().optional(),
     yoloAcknowledged: z.boolean().optional(),
+    snapshots: z.boolean().optional(),
+    autoCompact: z.boolean().optional(),
+    contextWindow: z.number().int().positive().finite().optional(),
+    compactReserveTokens: z.number().int().positive().finite().optional(),
+    compactKeepRecentTokens: z.number().int().positive().finite().optional(),
+    multiAgent: z.boolean().optional(),
+    multiAgentVersion: z.enum(['v1', 'v2']).optional(),
+    hooks: hookConfigSchema.optional(),
     ui: uiSchema.optional(),
   })
   .strict();
@@ -241,6 +273,46 @@ export function resolveConfig(overrides: ConfigOverrides = {}): AgentConfig {
   const exaApiKey = process.env.EXA_API_KEY ?? undefined;
   const mcpConfigPath = process.env.JUNO_MCP_CONFIG ?? undefined;
 
+  const snapshots =
+    parseBoolEnv('JUNO_SNAPSHOTS', process.env.JUNO_SNAPSHOTS) ??
+    fileConfig.snapshots ??
+    true;
+  const autoCompact =
+    parseBoolEnv('JUNO_AUTO_COMPACT', process.env.JUNO_AUTO_COMPACT) ??
+    fileConfig.autoCompact ??
+    true;
+  const contextWindow =
+    parsePositiveIntEnv(
+      'JUNO_CONTEXT_WINDOW',
+      process.env.JUNO_CONTEXT_WINDOW,
+    ) ??
+    fileConfig.contextWindow ??
+    272_000;
+  const compactReserveTokens =
+    parsePositiveIntEnv(
+      'JUNO_COMPACT_RESERVE_TOKENS',
+      process.env.JUNO_COMPACT_RESERVE_TOKENS,
+    ) ??
+    fileConfig.compactReserveTokens ??
+    16_384;
+  const compactKeepRecentTokens =
+    parsePositiveIntEnv(
+      'JUNO_COMPACT_KEEP_RECENT_TOKENS',
+      process.env.JUNO_COMPACT_KEEP_RECENT_TOKENS,
+    ) ??
+    fileConfig.compactKeepRecentTokens ??
+    24_000;
+  const multiAgent =
+    parseBoolEnv('JUNO_MULTI_AGENT', process.env.JUNO_MULTI_AGENT) ??
+    fileConfig.multiAgent ??
+    true;
+  const multiAgentVersion: 'v1' | 'v2' =
+    process.env.JUNO_MULTI_AGENT_VERSION === 'v1'
+      ? 'v1'
+      : process.env.JUNO_MULTI_AGENT_VERSION === 'v2'
+        ? 'v2'
+        : (fileConfig.multiAgentVersion ?? 'v2');
+
   return {
     cwd,
     homeDir,
@@ -267,7 +339,19 @@ export function resolveConfig(overrides: ConfigOverrides = {}): AgentConfig {
     yoloAcknowledged,
     exaApiKey,
     mcpConfigPath,
+    snapshots,
+    autoCompact,
+    contextWindow,
+    compactReserveTokens,
+    compactKeepRecentTokens,
+    multiAgent,
+    multiAgentVersion,
   };
+}
+
+export function loadHookConfig(configFile: string): HookConfig {
+  const file = loadConfigFile(configFile);
+  return (file.hooks ?? {}) as HookConfig;
 }
 
 export async function loadConfigFromDisk(
