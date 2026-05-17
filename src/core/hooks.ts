@@ -124,29 +124,49 @@ const defaultSpawn: HookSpawn = async (command, stdin, cwd, timeoutMs) => {
       stderr: 'pipe',
       env: process.env,
     });
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
+
+    // Race completion against the deadline. We must NOT await the stream
+    // readers on timeout: a `sh -c` that forked a child (e.g. `sleep`) leaves
+    // that child holding the stdout pipe open even after `sh` is killed, so
+    // the readers would block for the full command duration. On timeout we
+    // kill and return immediately; the orphaned child self-exits shortly.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<'timeout'>((resolve) => {
+      timer = setTimeout(() => resolve('timeout'), timeoutMs);
+    });
+    const completion = (async () => {
+      const [stdout, stderr] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+      ]);
+      const code = await proc.exited;
+      return { code, stdout, stderr } as const;
+    })();
+
+    const result = await Promise.race([completion, timeout]);
+    if (timer) clearTimeout(timer);
+
+    if (result === 'timeout') {
       try {
-        proc.kill();
+        proc.kill(9);
       } catch {
         // already gone
       }
-    }, timeoutMs);
-    const [stdout, stderr] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-    ]);
-    const code = await proc.exited;
-    clearTimeout(timer);
-    if (timedOut) {
+      // Swallow the now-unobserved completion promise so it can't surface as
+      // an unhandled rejection if the killed process errors the stream.
+      completion.catch(() => {});
       return {
         code: 1,
         stdout: '',
         stderr: `hook timed out after ${timeoutMs}ms`,
       };
     }
-    return { code, stdout: cap(stdout), stderr: cap(stderr) };
+
+    return {
+      code: result.code,
+      stdout: cap(result.stdout),
+      stderr: cap(result.stderr),
+    };
   } catch (error) {
     return {
       code: 1,

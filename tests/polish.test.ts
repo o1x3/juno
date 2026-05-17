@@ -63,8 +63,9 @@ describe('hook timeout reporting', () => {
     });
     const start = Date.now();
     const d = await runner.preToolUse('Bash', { command: 'x' });
-    // Should return well before the 5s sleep finishes.
-    expect(Date.now() - start).toBeLessThan(4000);
+    // Must return ~at the 1s deadline, NOT wait the full 5s sleep (the bug:
+    // killing `sh` doesn't free the stdout pipe held by the `sleep` child).
+    expect(Date.now() - start).toBeLessThan(3000);
     // Timeout is a non-blocking soft error (code 1), not a hard block.
     expect(d.block).toBe(false);
   }, 10_000);
