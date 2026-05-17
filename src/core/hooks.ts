@@ -186,6 +186,18 @@ function interpret(res: SpawnResult, event: HookEvent): HookDecision {
         ? (parsed.additionalContext as string)
         : undefined);
 
+    // `continue: false` is Claude Code's hard stop; stopReason is the message.
+    if (parsed.continue === false) {
+      return {
+        block: true,
+        reason:
+          (parsed.stopReason as string | undefined) ??
+          reason ??
+          `${event} hook requested a stop`,
+        additionalContext,
+      };
+    }
+
     if (decision === 'block' || permission === 'deny') {
       return {
         block: true,

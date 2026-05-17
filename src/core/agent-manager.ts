@@ -102,13 +102,22 @@ export class AgentManager {
     return undefined;
   }
 
+  // Idempotent wakeup. spawn()/sendInput() call this; the running flag plus
+  // the post-loop recheck guarantee a message enqueued at any point is drained
+  // exactly once with no lost wakeups.
+  private pump(rec: AgentRecord): void {
+    if (rec.running) return;
+    void this.drive(rec);
+  }
+
   private async drive(rec: AgentRecord): Promise<void> {
     if (rec.running) return;
     rec.running = true;
     try {
-      while (rec.mailbox.length > 0) {
-        // close() may flip status to 'shutdown' between turns.
-        if ((rec.status as AgentStatus) === 'shutdown') break;
+      while (
+        rec.mailbox.length > 0 &&
+        (rec.status as AgentStatus) !== 'shutdown'
+      ) {
         const prompt = rec.mailbox.shift() as string;
         rec.lastTaskMessage = prompt;
         rec.status = 'running';
@@ -135,6 +144,11 @@ export class AgentManager {
       }
     } finally {
       rec.running = false;
+    }
+    // A message can land between the while-condition check and `running =
+    // false`; re-pump so it is never stranded.
+    if (rec.mailbox.length > 0 && (rec.status as AgentStatus) !== 'shutdown') {
+      this.pump(rec);
     }
   }
 
@@ -164,12 +178,27 @@ export class AgentManager {
     if (!message) {
       return { ok: false, error: 'message must be a non-empty string' };
     }
+    const requested = req.taskName?.trim();
+    if (requested && !/^[a-z0-9_]+$/.test(requested)) {
+      return {
+        ok: false,
+        error: `invalid task_name '${requested}': use lowercase letters, digits, and underscores`,
+      };
+    }
+    if (
+      requested &&
+      [...this.agents.values()].some(
+        (r) => r.taskName === requested && r.status !== 'shutdown',
+      )
+    ) {
+      return {
+        ok: false,
+        error: `task_name '${requested}' is already in use by a live agent`,
+      };
+    }
     this.counter += 1;
     const id = `agent-${crypto.randomUUID().slice(0, 8)}`;
-    const taskName =
-      req.taskName?.trim() && /^[a-z0-9_]+$/.test(req.taskName.trim())
-        ? req.taskName.trim()
-        : `task_${this.counter}`;
+    const taskName = requested ? requested : `task_${this.counter}`;
     const rec: AgentRecord = {
       id,
       taskName,
@@ -183,7 +212,7 @@ export class AgentManager {
     };
     this.agents.set(id, rec);
     this.bump();
-    void this.drive(rec);
+    this.pump(rec);
     return { ok: true, id, taskName };
   }
 
@@ -208,7 +237,7 @@ export class AgentManager {
     }
     const submissionId = `sub-${crypto.randomUUID().slice(0, 8)}`;
     this.bump();
-    void this.drive(rec);
+    this.pump(rec);
     return { ok: true, submissionId };
   }
 
@@ -357,10 +386,18 @@ export function createMultiAgentTools(
     inputSchema: spawnSchema,
     execute: async (input) => {
       const id = cid(input);
+      const taskName = input.task_name ? String(input.task_name).trim() : '';
+      if (version === 'v2' && !taskName) {
+        return fail(
+          id,
+          'spawn_agent',
+          'task_name is required (lowercase letters, digits, underscores)',
+        );
+      }
       const res = manager.spawn({
         message: String(input.message ?? ''),
         agentType: input.agent_type ? String(input.agent_type) : undefined,
-        taskName: input.task_name ? String(input.task_name) : undefined,
+        taskName: taskName || undefined,
         model: input.model ? String(input.model) : undefined,
       });
       if (!res.ok) return fail(id, 'spawn_agent', res.error);
