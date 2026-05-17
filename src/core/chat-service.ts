@@ -19,6 +19,7 @@ import {
   estimateConversationTokens,
   shouldCompact,
 } from '@/core/compaction';
+import { createHookRunner, loadHooks } from '@/core/hooks';
 import { loadProjectInstructions } from '@/core/instructions';
 import { availableLspServerIds } from '@/core/lsp';
 import { createAiSdkModelClient } from '@/core/model-client';
@@ -280,6 +281,12 @@ export async function startOrResumeChat(
       : config.namingModel;
   const summarize = buildSummarizeFn(routing.modelClient, summarizeModel);
 
+  const hookRunner = createHookRunner({
+    hooks: loadHooks({ configFile: config.configFile, cwd: config.cwd }),
+    sessionId,
+    cwd: config.cwd,
+  });
+
   // Auto-compaction: before running the turn, if the restored context is too
   // large for the window, fold older turns into a checkpoint summary and
   // continue on the smaller context. Best-effort — a failure leaves the
@@ -383,6 +390,7 @@ export async function startOrResumeChat(
       modelClient: routing.modelClient,
       requestApproval: options.requestApproval,
       requestUserAnswer: options.requestUserAnswer,
+      hooks: hookRunner,
     });
     return {
       taskId: childSessionId,
@@ -434,6 +442,7 @@ export async function startOrResumeChat(
     requestApproval: options.requestApproval,
     requestUserAnswer: options.requestUserAnswer,
     snapshot: snapshotStore,
+    hooks: hookRunner,
   });
 
   if (isFreshSession && config.autoName && !existingName) {
