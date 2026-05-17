@@ -320,6 +320,72 @@ describe('compaction hardening', () => {
     // Synthesized interrupted result must still parse.
     expect(messages.some((m) => m.role === 'tool')).toBe(true);
   });
+
+  test('compaction never orphans a tool call across the summary boundary', async () => {
+    ws = await mkdtemp(join(tmpdir(), 'h-comp-'));
+    const sessionsDir = join(ws, 'sessions');
+    const sid = 's';
+    // Two complete tool turns then a fresh recent turn. A naive cut could
+    // split an assistant(toolCalls) from its tool_result — assert it doesn't.
+    for (let t = 0; t < 3; t += 1) {
+      await appendSessionEvent(
+        sessionsDir,
+        sid,
+        uEvent(`turn ${t} ${'q'.repeat(400)}`),
+      );
+      await appendSessionEvent(sessionsDir, sid, {
+        type: 'assistant_message',
+        timestamp: new Date().toISOString(),
+        message: {
+          role: 'assistant',
+          content: '',
+          toolCalls: [
+            { toolCallId: `c${t}`, toolName: 'Read', input: { f: t } },
+          ],
+        },
+      });
+      await appendSessionEvent(sessionsDir, sid, {
+        type: 'tool_result',
+        timestamp: new Date().toISOString(),
+        result: {
+          toolCallId: `c${t}`,
+          toolName: 'Read',
+          output: `data ${t} ${'r'.repeat(400)}`,
+        },
+      });
+    }
+    const client: ModelClient = {
+      async runStep() {
+        return {
+          text: 'SUM',
+          toolCalls: [],
+          finishReason: 'stop',
+          usage: { input: 1, output: 1 },
+        };
+      },
+    };
+    const r = await compactSession({
+      sessionsDir,
+      sessionId: sid,
+      modelClient: client,
+      model: 'm',
+      keepRecentTokens: 60,
+      force: true,
+      buildMessages: restoreMessages,
+    });
+    expect(r.compacted).toBe(true);
+    const messages = restoreMessages(await readSessionEvents(sessionsDir, sid));
+    // Every assistant tool call id must have a matching tool result id.
+    const callIds = new Set<string>();
+    const resultIds = new Set<string>();
+    for (const m of messages) {
+      if (m.role === 'assistant')
+        for (const c of m.toolCalls ?? []) callIds.add(c.toolCallId);
+      if (m.role === 'tool')
+        for (const res of m.results) resultIds.add(res.toolCallId);
+    }
+    for (const id of callIds) expect(resultIds.has(id)).toBe(true);
+  });
 });
 
 // ── Hooks hardening ───────────────────────────────────────────────────────
