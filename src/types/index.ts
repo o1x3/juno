@@ -83,6 +83,7 @@ export type ToolResult = {
   toolName: ToolName;
   output: unknown;
   isError?: boolean;
+  media?: ToolResultMedia;
 };
 
 export type BuiltinToolName =
@@ -90,14 +91,39 @@ export type BuiltinToolName =
   | 'Write'
   | 'Edit'
   | 'MultiEdit'
+  | 'apply_patch'
   | 'Bash'
   | 'Grep'
   | 'Glob'
   | 'LS'
   | 'TodoWrite'
   | 'AskUserQuestion'
+  | 'Task'
+  | 'Skill'
+  | 'LSP'
+  | 'view_image'
   | 'WebFetch'
   | 'WebSearch';
+
+// Optional multimodal payload on a tool result. When present, the model-client
+// layer serializes it into the provider's native image input so a vision model
+// actually sees the pixels (mirrors codex's view_image FunctionCallOutput
+// ContentItems path).
+export type ToolResultMedia = {
+  kind: 'image';
+  dataUrl: string;
+  mediaType: string;
+  detail?: 'original' | null;
+};
+
+export type PatchFileOp = 'add' | 'update' | 'delete' | 'move';
+
+export type PatchFilePreview = {
+  path: string;
+  op: PatchFileOp;
+  movePath?: string;
+  diff?: DiffPayload;
+};
 
 // `(string & {})` keeps IntelliSense for the literal builtins while letting
 // MCP tools (named `<server>_<tool>`) flow through the type system at runtime.
@@ -113,6 +139,7 @@ export type ApprovalPreview =
     }
   | { kind: 'edit'; path: string; diff?: DiffPayload }
   | { kind: 'multi-edit'; path: string; created: boolean; diff?: DiffPayload }
+  | { kind: 'apply-patch'; files: PatchFilePreview[] }
   | { kind: 'bash'; command: string }
   | {
       kind: 'mcp';

@@ -125,7 +125,16 @@ type CodexInputItem =
   | {
       type: 'function_call_output';
       call_id: string;
-      output: string;
+      // Plain string for ordinary results; the content-items form (mirroring
+      // codex's `FunctionCallOutputBody::ContentItems`) when the tool returned
+      // image media so the model actually sees the pixels.
+      output:
+        | string
+        | Array<{
+            type: 'input_image';
+            image_url: string;
+            detail?: 'original' | null;
+          }>;
     };
 
 type CodexToolDef = {
@@ -182,6 +191,20 @@ export function buildCodexInput(
       continue;
     }
     for (const result of message.results) {
+      if (result.media?.kind === 'image') {
+        input.push({
+          type: 'function_call_output',
+          call_id: result.toolCallId,
+          output: [
+            {
+              type: 'input_image',
+              image_url: result.media.dataUrl,
+              detail: result.media.detail ?? null,
+            },
+          ],
+        });
+        continue;
+      }
       input.push({
         type: 'function_call_output',
         call_id: result.toolCallId,

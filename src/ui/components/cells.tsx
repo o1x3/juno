@@ -178,6 +178,111 @@ function extractDiff(result: ToolResult | undefined): {
   return { diff: diff as DiffPayload, path };
 }
 
+function extractPatchFiles(
+  result: ToolResult | undefined,
+): { path: string; op: string; movePath?: string; diff?: DiffPayload }[] {
+  if (!result || result.isError || result.toolName !== 'apply_patch') return [];
+  const output = result.output;
+  if (!output || typeof output !== 'object') return [];
+  const files = (output as { files?: unknown }).files;
+  if (!Array.isArray(files)) return [];
+  return files.filter(
+    (
+      f,
+    ): f is {
+      path: string;
+      op: string;
+      movePath?: string;
+      diff?: DiffPayload;
+    } =>
+      Boolean(f) &&
+      typeof f === 'object' &&
+      typeof (f as { path?: unknown }).path === 'string',
+  );
+}
+
+function extractTaskResult(result: ToolResult | undefined): {
+  agent: string;
+  description: string;
+  text: string;
+  toolCalls: number;
+} | null {
+  if (!result || result.isError || result.toolName !== 'Task') return null;
+  const output = result.output;
+  if (!output || typeof output !== 'object') return null;
+  const o = output as {
+    agent?: unknown;
+    description?: unknown;
+    result?: unknown;
+    tool_calls?: unknown;
+  };
+  if (typeof o.agent !== 'string' || typeof o.result !== 'string') return null;
+  return {
+    agent: o.agent,
+    description: typeof o.description === 'string' ? o.description : '',
+    text: o.result,
+    toolCalls: typeof o.tool_calls === 'number' ? o.tool_calls : 0,
+  };
+}
+
+function extractViewImage(result: ToolResult | undefined): {
+  path: string;
+  mediaType: string;
+  bytes: number;
+  detail: string | null;
+} | null {
+  if (!result || result.isError || result.toolName !== 'view_image') {
+    return null;
+  }
+  const o = result.output as {
+    path?: unknown;
+    mediaType?: unknown;
+    bytes?: unknown;
+    detail?: unknown;
+  } | null;
+  if (!o || typeof o !== 'object' || typeof o.path !== 'string') return null;
+  return {
+    path: o.path,
+    mediaType: typeof o.mediaType === 'string' ? o.mediaType : 'image',
+    bytes: typeof o.bytes === 'number' ? o.bytes : 0,
+    detail: o.detail === 'original' ? 'original' : null,
+  };
+}
+
+function extractSkill(result: ToolResult | undefined): {
+  name: string;
+  fileCount: number;
+} | null {
+  if (!result || result.isError || result.toolName !== 'Skill') return null;
+  const o = result.output as { name?: unknown; fileCount?: unknown } | null;
+  if (!o || typeof o !== 'object' || typeof o.name !== 'string') return null;
+  return {
+    name: o.name,
+    fileCount: typeof o.fileCount === 'number' ? o.fileCount : 0,
+  };
+}
+
+function extractLsp(result: ToolResult | undefined): {
+  operation: string;
+  server: string;
+  empty: boolean;
+} | null {
+  if (!result || result.isError || result.toolName !== 'LSP') return null;
+  const o = result.output as {
+    operation?: unknown;
+    server?: unknown;
+    empty?: unknown;
+  } | null;
+  if (!o || typeof o !== 'object' || typeof o.operation !== 'string') {
+    return null;
+  }
+  return {
+    operation: o.operation,
+    server: typeof o.server === 'string' ? o.server : 'lsp',
+    empty: o.empty === true,
+  };
+}
+
 function renderDiffLine(
   line: DiffLine,
   width: number,
@@ -281,7 +386,18 @@ function summarizeArgs(
   cap: number = 60,
 ): string {
   const limit = Math.max(20, cap);
-  const keys = ['filePath', 'pattern', 'command'];
+  if (
+    typeof input.subagent_type === 'string' &&
+    input.subagent_type.length > 0
+  ) {
+    const desc =
+      typeof input.description === 'string' && input.description.length > 0
+        ? `: ${input.description}`
+        : '';
+    const v = `${input.subagent_type}${desc}`;
+    return v.length > limit ? `${v.slice(0, limit - 3)}…` : v;
+  }
+  const keys = ['filePath', 'path', 'pattern', 'command', 'name'];
   for (const k of keys) {
     if (typeof input[k] === 'string' && (input[k] as string).length > 0) {
       const v = input[k] as string;
@@ -391,6 +507,11 @@ export function ToolGroupCell({
             : colors.exec;
         const args = summarizeArgs(entry.call.input, argCap);
         const diffInfo = extractDiff(entry.result);
+        const patchFiles = extractPatchFiles(entry.result);
+        const taskResult = extractTaskResult(entry.result);
+        const imageResult = extractViewImage(entry.result);
+        const skillResult = extractSkill(entry.result);
+        const lspResult = extractLsp(entry.result);
         return (
           <Box key={i} flexDirection="column" marginTop={1}>
             <Box flexDirection="row" width={rowWidth}>
@@ -411,6 +532,101 @@ export function ToolGroupCell({
                 width={width}
                 keyPrefix={`diff-${i}`}
               />
+            )}
+            {patchFiles.map((file, fi) => {
+              const opColor: ThemeColor =
+                file.op === 'add'
+                  ? colors.exec
+                  : file.op === 'delete'
+                    ? colors.error
+                    : colors.tool;
+              return (
+                <Box key={fi} flexDirection="column" marginLeft={6}>
+                  <Text color={opColor} dimColor>
+                    {file.op === 'move'
+                      ? `move ${file.path} → ${file.movePath ?? ''}`
+                      : `${file.op} ${file.path}`}
+                  </Text>
+                  {file.diff && (
+                    <DiffBlock
+                      payload={file.diff}
+                      path={file.movePath ?? file.path}
+                      width={width}
+                      keyPrefix={`patch-${i}-${fi}`}
+                      marginLeft={0}
+                    />
+                  )}
+                </Box>
+              );
+            })}
+            {taskResult && (
+              <Box
+                flexDirection="column"
+                marginLeft={6}
+                marginTop={1}
+                borderStyle="round"
+                borderColor={colors.dim}
+                paddingX={1}
+              >
+                <Box flexDirection="row">
+                  <Text color={colors.accent} bold>
+                    {`◇ ${taskResult.agent}`}
+                  </Text>
+                  <Box flexGrow={1} />
+                  <Text color={colors.dim} dimColor>
+                    {`${taskResult.toolCalls} tool${
+                      taskResult.toolCalls === 1 ? '' : 's'
+                    }`}
+                  </Text>
+                </Box>
+                {taskResult.description.length > 0 && (
+                  <Text color={colors.dim} dimColor>
+                    {taskResult.description}
+                  </Text>
+                )}
+                <Box flexDirection="column" marginTop={1}>
+                  {renderMarkdown(
+                    taskResult.text || '(no summary returned)',
+                    Math.max(20, width - 12),
+                  )}
+                </Box>
+              </Box>
+            )}
+            {lspResult && (
+              <Box flexDirection="row" marginLeft={6}>
+                <Text color={colors.accent}>{'⌖ '}</Text>
+                <Text color={colors.dim} dimColor>
+                  {`${lspResult.server} · ${lspResult.operation}${
+                    lspResult.empty ? ' · no results' : ''
+                  }`}
+                </Text>
+              </Box>
+            )}
+            {skillResult && (
+              <Box flexDirection="row" marginLeft={6}>
+                <Text color={colors.accent}>{'✦ '}</Text>
+                <Text color={colors.dim} dimColor>
+                  {`loaded skill: ${skillResult.name}${
+                    skillResult.fileCount > 0
+                      ? ` · ${skillResult.fileCount} resource file${
+                          skillResult.fileCount === 1 ? '' : 's'
+                        }`
+                      : ''
+                  }`}
+                </Text>
+              </Box>
+            )}
+            {imageResult && (
+              <Box flexDirection="row" marginLeft={6}>
+                <Text color={colors.accent}>{'▣ '}</Text>
+                <Text color={colors.dim} dimColor>
+                  {`${imageResult.path} · ${imageResult.mediaType} · ${(
+                    imageResult.bytes / 1024
+                  ).toFixed(1)} kB${
+                    imageResult.detail === 'original' ? ' · original' : ''
+                  } — shown to the model`}
+                </Text>
+              </Box>
             )}
           </Box>
         );
@@ -635,6 +851,8 @@ function approvalIcon(preview: ApprovalPreview): string {
       return glyphs.approvalEdit;
     case 'multi-edit':
       return glyphs.approvalMultiEdit;
+    case 'apply-patch':
+      return glyphs.approvalPatch;
     case 'bash':
       return glyphs.approvalBash;
     case 'mcp':
@@ -651,6 +869,10 @@ function approvalSubtitle(preview: ApprovalPreview, width: number): string {
       return `Edit ${truncatePath(preview.path, limit)}`;
     case 'multi-edit':
       return `MultiEdit ${preview.created ? '(new) ' : ''}${truncatePath(preview.path, limit)}`;
+    case 'apply-patch': {
+      const n = preview.files.length;
+      return `apply_patch · ${n} file${n === 1 ? '' : 's'}`;
+    }
     case 'bash':
       return `Bash`;
     case 'mcp':
@@ -767,6 +989,45 @@ export function ApprovalCell({
             />
           </Box>
         )}
+
+      {cell.preview.kind === 'apply-patch' && (
+        <Box flexDirection="column" marginTop={1}>
+          {cell.preview.files.map((file, fi) => {
+            const opColor: ThemeColor =
+              file.op === 'add'
+                ? colors.exec
+                : file.op === 'delete'
+                  ? colors.error
+                  : colors.tool;
+            const opLabel =
+              file.op === 'move'
+                ? `move    ${truncatePath(file.path, Math.max(12, innerWidth / 2))} → ${truncatePath(
+                    file.movePath ?? '',
+                    Math.max(12, innerWidth / 2),
+                  )}`
+                : `${file.op.padEnd(7)} ${truncatePath(file.path, Math.max(20, innerWidth - 10))}`;
+            return (
+              <Box key={fi} flexDirection="column" marginTop={fi === 0 ? 0 : 1}>
+                <Box flexDirection="row" marginLeft={3}>
+                  <Text color={opColor} bold={isPending}>
+                    {opLabel}
+                  </Text>
+                </Box>
+                {file.diff && (
+                  <DiffBlock
+                    payload={file.diff}
+                    path={file.movePath ?? file.path}
+                    width={cell.expandDiff ? innerWidth : innerWidth - 2}
+                    keyPrefix={`approval-${cell.id}-f${fi}`}
+                    expand={cell.expandDiff === true}
+                    marginLeft={cell.expandDiff ? 4 : 6}
+                  />
+                )}
+              </Box>
+            );
+          })}
+        </Box>
+      )}
 
       {isPending && (
         <Box flexDirection="column" marginTop={1}>

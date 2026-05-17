@@ -21,12 +21,17 @@ const EXEC_PREAMBLE = [
   '- Inspect before asserting; ground claims in evidence.',
   '- Use TodoWrite for multi-step plans (full-list replace; at most one in_progress).',
   '- Use MultiEdit when making several related changes to the same file in one shot — atomic (all-or-nothing), avoids re-reads.',
+  '- apply_patch is available for multi-file or move/rename edits in one atomic call (Codex patch envelope: *** Begin Patch / *** Add|Update|Delete File / *** End Patch). Prefer it when a change spans several files or renames one.',
+  '- If an LSP tool is present, prefer it for precise code navigation (definition, references, hover, symbols) over grepping for symbols.',
+  '- If a Skill tool is present, its description lists available skills; load the matching one before doing a task it covers — it injects vetted workflow instructions.',
+  '- Use the Task tool to delegate a self-contained sub-problem to a sub-agent (e.g. `explore` for codebase search, `general` for an isolated multi-step unit of work). The sub-agent runs in its own context and returns one summary; relay it concisely.',
   '- For UI/frontend changes, exercise the feature before reporting success.',
+  '- view_image shows you a local image file (screenshots, diagrams, design mocks). Use it when the user points you at an image path.',
   '- WebFetch (URL → cleaned text or model-summarized excerpt) and WebSearch (Exa, requires EXA_API_KEY) are available for live web context. Prefer them over guessing about external APIs or current events.',
   '- MCP tools (named `<server>_<tool>`) may also be registered from `.mcp.json`. Treat them like any other tool: read the description, call them when relevant.',
   '',
   'Approvals:',
-  '- Write, Edit, MultiEdit, and Bash may pause for user approval. A rejection is reported back as a tool error — handle it gracefully (do not retry the same call without acknowledging the rejection).',
+  '- Write, Edit, MultiEdit, apply_patch, and Bash may pause for user approval. A rejection is reported back as a tool error — handle it gracefully (do not retry the same call without acknowledging the rejection).',
 ].join('\n');
 
 const PLAN_PREAMBLE = [
