@@ -16,6 +16,7 @@ import {
   readSessionEvents,
 } from '@/core/session-store';
 import { executeShellCommand } from '@/core/tools';
+import { undoLastTurn } from '@/core/undo';
 import {
   checkForUpdate,
   detectInstallContext,
@@ -103,6 +104,48 @@ function approximateBreakdown(cells: TranscriptCell[]): {
     assistant: Math.ceil(assistant / 4),
     tool: Math.ceil(tool / 4),
   };
+}
+
+// Rebuild a minimal transcript from persisted session events. Used on resume
+// and after `/undo` truncates the session. A compaction event collapses
+// everything before it into a single note cell.
+function cellsFromEvents(
+  events: import('@/types').SessionEvent[],
+): TranscriptCell[] {
+  const restored: TranscriptCell[] = [];
+  for (const event of events) {
+    if (event.type === 'compaction') {
+      restored.length = 0;
+      restored.push({
+        id: `e-${restored.length}-compact`,
+        kind: 'plan-note',
+        text: `↻ context compacted — ${event.messagesSummarized} messages summarized (~${event.tokensBefore} tokens reclaimed)`,
+      });
+    } else if (event.type === 'user_message') {
+      restored.push({
+        id: `e-${restored.length}`,
+        kind: 'user',
+        text: event.message.content,
+      });
+    } else if (event.type === 'assistant_message') {
+      if (event.message.content) {
+        restored.push({
+          id: `e-${restored.length}`,
+          kind: 'assistant',
+          text: event.message.content,
+        });
+      }
+    }
+  }
+  const latestPlan = findLatestPlan(events);
+  if (latestPlan && latestPlan.length > 0) {
+    restored.push({
+      id: `e-${restored.length}-plan`,
+      kind: 'todo',
+      todos: latestPlan,
+    });
+  }
+  return restored;
 }
 
 export function ChatApp({
@@ -313,31 +356,9 @@ export function ChatApp({
             resumedSessionId,
           );
           if (cancelled) return;
-          const restored: TranscriptCell[] = [];
-          for (const event of events) {
-            if (event.type === 'user_message') {
-              restored.push({
-                id: `e-${restored.length}`,
-                kind: 'user',
-                text: event.message.content,
-              });
-            } else if (event.type === 'assistant_message') {
-              if (event.message.content) {
-                restored.push({
-                  id: `e-${restored.length}`,
-                  kind: 'assistant',
-                  text: event.message.content,
-                });
-              }
-            }
-          }
+          const restored = cellsFromEvents(events);
           const latestPlan = findLatestPlan(events);
           if (latestPlan && latestPlan.length > 0) {
-            restored.push({
-              id: `e-${restored.length}-plan`,
-              kind: 'todo',
-              todos: latestPlan,
-            });
             setCurrentPlan(latestPlan);
           } else if (latestPlan) {
             setCurrentPlan([]);
@@ -878,6 +899,8 @@ export function ChatApp({
               '  /rename      rename this session',
               '  /todos       show current plan',
               '  /diff        git diff',
+              '  /undo        revert last turn (files + history)',
+              '  /compact     summarize & shrink context',
               '  /copy        copy last assistant message',
               '  /exit        quit',
               '',
@@ -909,6 +932,40 @@ export function ChatApp({
         }
         case 'diff': {
           await runBashCommand('git diff --no-color');
+          return;
+        }
+        case 'undo': {
+          if (!activeSessionId) {
+            appendCell({
+              id: `un-${crypto.randomUUID()}`,
+              kind: 'plan-note',
+              text: 'nothing to undo yet — no turn has run in this session.',
+            });
+            return;
+          }
+          const res = await undoLastTurn({
+            cwd: config.cwd,
+            homeDir: config.homeDir,
+            sessionsDir: config.sessionsDir,
+            sessionId: activeSessionId,
+          });
+          if (!res.undone) {
+            appendCell({
+              id: `un-${crypto.randomUUID()}`,
+              kind: 'plan-note',
+              text: `/undo: ${res.reason}`,
+            });
+            return;
+          }
+          setCells(cellsFromEvents(res.remainingEvents));
+          setCurrentPlan(findLatestPlan(res.remainingEvents) ?? []);
+          setUnreadCount(0);
+          setScrollOffset(0);
+          appendCell({
+            id: `un-${crypto.randomUUID()}`,
+            kind: 'plan-note',
+            text: `↩ undid last turn — workspace restored to the pre-turn snapshot, ${res.removedEvents} session event(s) dropped.`,
+          });
           return;
         }
         case 'copy': {
@@ -967,7 +1024,15 @@ export function ChatApp({
           });
       }
     },
-    [appendCell, cells, config, currentPlan, exit, runBashCommand],
+    [
+      activeSessionId,
+      appendCell,
+      cells,
+      config,
+      currentPlan,
+      exit,
+      runBashCommand,
+    ],
   );
 
   // Submit handler — depends on dispatchSlash and runBashCommand defined above.

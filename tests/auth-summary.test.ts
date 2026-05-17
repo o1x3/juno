@@ -63,6 +63,13 @@ function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
     autoUpgrade: false,
     updateCheckEnabled: false,
     yoloAcknowledged: false,
+    snapshots: false,
+    autoCompact: false,
+    contextWindow: 272000,
+    compactReserveTokens: 16384,
+    compactKeepRecentTokens: 24000,
+    multiAgent: false,
+    multiAgentVersion: 'v2',
     ...overrides,
   };
 }

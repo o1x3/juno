@@ -1,4 +1,5 @@
 import { appendSessionEvent } from '@/core/session-store';
+import type { SnapshotStore } from '@/core/snapshot';
 import type {
   AgentConfig,
   ApprovalDecision,
@@ -30,6 +31,9 @@ type TurnOptions = {
   onUsage?: (usage: ModelUsage) => void;
   requestApproval?: (req: ApprovalRequest) => Promise<ApprovalDecision>;
   requestUserAnswer?: (req: QuestionRequest) => Promise<QuestionResponse>;
+  // When present, a filesystem snapshot is captured at the start of the turn
+  // (right after the user message is recorded) so `/undo` can revert it.
+  snapshot?: SnapshotStore;
 };
 
 function mergeUsage(
@@ -66,6 +70,7 @@ export async function runAgentTurn(
     onUsage,
     requestApproval,
     requestUserAnswer,
+    snapshot,
   } = options;
 
   const conversation = [
@@ -79,6 +84,24 @@ export async function runAgentTurn(
     timestamp: new Date().toISOString(),
     message: { role: 'user', content: userInput },
   });
+
+  // Capture a pre-turn filesystem snapshot so `/undo` can revert this turn's
+  // edits. Best-effort: a snapshot failure must never block the turn.
+  if (snapshot) {
+    try {
+      const hash = await snapshot.create();
+      if (hash) {
+        await appendSessionEvent(config.sessionsDir, sessionId, {
+          type: 'snapshot',
+          timestamp: new Date().toISOString(),
+          sessionId,
+          hash,
+        });
+      }
+    } catch {
+      // ignore — snapshots are advisory
+    }
+  }
 
   let finalAssistantText = '';
   let aggregateUsage: ModelUsage | undefined;

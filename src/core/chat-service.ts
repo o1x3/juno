@@ -27,6 +27,7 @@ import {
   restoreMessages,
 } from '@/core/session-store';
 import { loadSkills } from '@/core/skills';
+import { SnapshotStore } from '@/core/snapshot';
 import { createBuiltinTools } from '@/core/tools';
 import type {
   AgentConfig,
@@ -372,6 +373,11 @@ export async function startOrResumeChat(
   );
   const tools = filterToolsForMode(allTools, mode);
 
+  const snapshotStore =
+    config.snapshots && (await SnapshotStore.enabled(config.cwd))
+      ? new SnapshotStore({ cwd: config.cwd, homeDir: config.homeDir })
+      : undefined;
+
   const result = await runAgentTurn({
     config: routing.runtimeConfig,
     sessionId,
@@ -387,6 +393,7 @@ export async function startOrResumeChat(
     onUsage: options.onUsage,
     requestApproval: options.requestApproval,
     requestUserAnswer: options.requestUserAnswer,
+    snapshot: snapshotStore,
   });
 
   if (isFreshSession && config.autoName && !existingName) {

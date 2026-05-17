@@ -28,6 +28,13 @@ export function makeConfig(
     autoUpgrade: false,
     updateCheckEnabled: false,
     yoloAcknowledged: false,
+    snapshots: false,
+    autoCompact: false,
+    contextWindow: 272_000,
+    compactReserveTokens: 16_384,
+    compactKeepRecentTokens: 24_000,
+    multiAgent: false,
+    multiAgentVersion: 'v2',
     ...overrides,
   };
 }
