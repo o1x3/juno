@@ -7,12 +7,14 @@ import {
   resolveCredential,
 } from '@/auth/storage';
 import { runAgentTurn } from '@/core/agent-loop';
+import { loadAgents, resolveAgentTools } from '@/core/agents';
 import {
   discoverCodexModels,
   pickCodexModelForChatGptAccount,
 } from '@/core/codex-models';
 import { createCodexResponsesClient } from '@/core/codex-responses-client';
 import { loadProjectInstructions } from '@/core/instructions';
+import { availableLspServerIds } from '@/core/lsp';
 import { createAiSdkModelClient } from '@/core/model-client';
 import { generateSessionName, type NamingDeps } from '@/core/naming';
 import { buildSystemPrompt } from '@/core/prompt';
@@ -24,6 +26,7 @@ import {
   readSessionEvents,
   restoreMessages,
 } from '@/core/session-store';
+import { loadSkills } from '@/core/skills';
 import { createBuiltinTools } from '@/core/tools';
 import type {
   AgentConfig,
@@ -51,6 +54,9 @@ export const PLAN_MODE_TOOLS: ReadonlySet<ToolName> = new Set([
   'LS',
   'TodoWrite',
   'AskUserQuestion',
+  'Skill',
+  'LSP',
+  'view_image',
   'WebFetch',
   'WebSearch',
 ]);
@@ -265,6 +271,85 @@ export async function startOrResumeChat(
       ? routing.activeModel
       : config.namingModel;
   const summarize = buildSummarizeFn(routing.modelClient, summarizeModel);
+
+  const agents = await loadAgents(config.cwd);
+  const skills = await loadSkills(config.cwd, config.homeDir);
+  // Probe once which language servers are on PATH; the LSP tool is only
+  // offered when at least one is available (no dead/erroring surface).
+  const lspServerIds = availableLspServerIds();
+  // Sub-agents reuse the parent's model client + web/MCP tooling but never get
+  // `Task` or `spawnSubAgent` (one branch deep — no recursion). Their writes
+  // still flow through the same approval callbacks as the parent.
+  const subAgentDeps = {
+    fetchImpl: options.fetchImpl,
+    summarize,
+    exaApiKey: options.exaApiKey ?? config.exaApiKey,
+    mcpTools: options.mcpTools,
+    skills,
+    lspServerIds,
+  };
+  const spawnSubAgent = async (req: {
+    agent: (typeof agents)[number];
+    description: string;
+    prompt: string;
+    taskId?: string;
+  }) => {
+    const childSessionId =
+      req.taskId ?? `${sessionId}.sub-${crypto.randomUUID().slice(0, 8)}`;
+    const priorEvents = req.taskId
+      ? await readSessionEvents(config.sessionsDir, childSessionId)
+      : [];
+    const childMessages = restoreMessages(priorEvents);
+    // OAuth-Codex routing has already filtered to a ChatGPT-account-safe
+    // model; honoring a per-agent override there would risk a 400. API-key
+    // routing can use the agent's preferred model.
+    const childModel =
+      req.agent.model && routing.authMode !== 'oauth-codex'
+        ? req.agent.model
+        : routing.activeModel;
+    const childCtx = {
+      cwd: routing.runtimeConfig.cwd,
+      outputLimit: routing.runtimeConfig.toolOutputLimit,
+      readLineLimit: routing.runtimeConfig.readLineLimit,
+      bashTimeoutMs: routing.runtimeConfig.bashTimeoutMs,
+      sessionsDir: routing.runtimeConfig.sessionsDir,
+      sessionId: childSessionId,
+    };
+    const childAllTools = createBuiltinTools(childCtx, subAgentDeps);
+    const allowed = new Set(
+      resolveAgentTools(
+        req.agent,
+        childAllTools.map((t) => String(t.name)),
+      ),
+    );
+    const childTools = childAllTools.filter((t) => allowed.has(String(t.name)));
+    const childSystemPrompt = [
+      req.agent.prompt,
+      instructions.mergedContent
+        ? `Project instructions:\n${instructions.mergedContent}`
+        : '',
+    ]
+      .filter((s) => s.length > 0)
+      .join('\n\n');
+    const childResult = await runAgentTurn({
+      config: { ...routing.runtimeConfig, model: childModel },
+      sessionId: childSessionId,
+      model: childModel,
+      systemPrompt: childSystemPrompt,
+      userInput: req.prompt,
+      messages: childMessages,
+      tools: childTools,
+      modelClient: routing.modelClient,
+      requestApproval: options.requestApproval,
+      requestUserAnswer: options.requestUserAnswer,
+    });
+    return {
+      taskId: childSessionId,
+      text: childResult.assistantText,
+      toolCalls: childResult.toolCalls.length,
+    };
+  };
+
   const allTools = createBuiltinTools(
     {
       cwd: routing.runtimeConfig.cwd,
@@ -279,6 +364,10 @@ export async function startOrResumeChat(
       summarize,
       exaApiKey: options.exaApiKey ?? config.exaApiKey,
       mcpTools: options.mcpTools,
+      agents,
+      spawnSubAgent,
+      skills,
+      lspServerIds,
     },
   );
   const tools = filterToolsForMode(allTools, mode);

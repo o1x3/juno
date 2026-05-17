@@ -18,6 +18,31 @@ export function toToolResultOutput(output: unknown) {
   return { type: 'json' as const, value: output };
 }
 
+// A tool result carrying image media becomes an AI SDK `content` output with a
+// `media` part so a vision model actually sees the pixels. Falls back to the
+// JSON/text form for everything else.
+function toToolResultOutputWithMedia(result: {
+  output: unknown;
+  media?: { kind: 'image'; dataUrl: string; mediaType: string };
+}) {
+  if (result.media?.kind === 'image') {
+    const comma = result.media.dataUrl.indexOf(',');
+    const base64 =
+      comma >= 0 ? result.media.dataUrl.slice(comma + 1) : result.media.dataUrl;
+    return {
+      type: 'content' as const,
+      value: [
+        {
+          type: 'media' as const,
+          data: base64,
+          mediaType: result.media.mediaType,
+        },
+      ],
+    };
+  }
+  return toToolResultOutput(result.output);
+}
+
 export function toModelMessages(messages: SerializedMessage[]): ModelMessage[] {
   return messages.map((message) => {
     if (message.role === 'user') {
@@ -55,7 +80,7 @@ export function toModelMessages(messages: SerializedMessage[]): ModelMessage[] {
         type: 'tool-result' as const,
         toolCallId: result.toolCallId,
         toolName: result.toolName,
-        output: toToolResultOutput(result.output),
+        output: toToolResultOutputWithMedia(result),
       })),
     };
   }) as ModelMessage[];

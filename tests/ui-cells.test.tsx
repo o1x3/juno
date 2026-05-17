@@ -8,6 +8,7 @@ import {
   ConfirmationCell,
   QuestionCell,
   TodoCell,
+  ToolGroupCell,
 } from '@/ui/components/cells';
 
 const WIDTH = 80;
@@ -84,6 +85,170 @@ describe('TodoCell', () => {
   });
 });
 
+describe('ToolGroupCell Task result', () => {
+  test('renders the sub-agent badge, description, tool count, and summary', () => {
+    const cell: Extract<TranscriptCell, { kind: 'tool-group' }> = {
+      id: 'tg1',
+      kind: 'tool-group',
+      collapsed: false,
+      complete: true,
+      tools: [
+        {
+          call: {
+            toolCallId: 'c1',
+            toolName: 'Task',
+            input: {
+              subagent_type: 'explore',
+              description: 'find the auth flow',
+            },
+          },
+          result: {
+            toolCallId: 'c1',
+            toolName: 'Task',
+            output: {
+              task_id: 's.sub-abc',
+              agent: 'explore',
+              description: 'find the auth flow',
+              tool_calls: 5,
+              result: 'Auth lives in src/auth/codex.ts and storage.ts.',
+            },
+          },
+          startedAt: 0,
+          endedAt: 1200,
+        },
+      ],
+    };
+    const { lastFrame } = render(<ToolGroupCell cell={cell} width={WIDTH} />);
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('Task');
+    expect(frame).toContain('explore: find the auth flow');
+    expect(frame).toContain('◇ explore');
+    expect(frame).toContain('5 tools');
+    expect(frame).toContain('Auth lives in src/auth/codex.ts');
+  });
+});
+
+describe('ToolGroupCell LSP result', () => {
+  test('renders a compact server · operation line', () => {
+    const cell: Extract<TranscriptCell, { kind: 'tool-group' }> = {
+      id: 'tgl',
+      kind: 'tool-group',
+      collapsed: false,
+      complete: true,
+      tools: [
+        {
+          call: {
+            toolCallId: 'l1',
+            toolName: 'LSP',
+            input: { operation: 'goToDefinition', filePath: 'src/x.ts' },
+          },
+          result: {
+            toolCallId: 'l1',
+            toolName: 'LSP',
+            output: {
+              operation: 'goToDefinition',
+              server: 'typescript',
+              empty: false,
+              result: [{ uri: 'file://x' }],
+              text: '[…]',
+            },
+          },
+          startedAt: 0,
+          endedAt: 30,
+        },
+      ],
+    };
+    const { lastFrame } = render(<ToolGroupCell cell={cell} width={WIDTH} />);
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('LSP');
+    expect(frame).toContain('typescript · goToDefinition');
+  });
+});
+
+describe('ToolGroupCell Skill result', () => {
+  test('renders a loaded-skill confirmation line', () => {
+    const cell: Extract<TranscriptCell, { kind: 'tool-group' }> = {
+      id: 'tgs',
+      kind: 'tool-group',
+      collapsed: false,
+      complete: true,
+      tools: [
+        {
+          call: {
+            toolCallId: 's1',
+            toolName: 'Skill',
+            input: { name: 'pdf-fill' },
+          },
+          result: {
+            toolCallId: 's1',
+            toolName: 'Skill',
+            output: {
+              name: 'pdf-fill',
+              dir: '.juno/skills/pdf-fill',
+              fileCount: 3,
+              content: '<skill_content name="pdf-fill">…</skill_content>',
+            },
+          },
+          startedAt: 0,
+          endedAt: 20,
+        },
+      ],
+    };
+    const { lastFrame } = render(<ToolGroupCell cell={cell} width={WIDTH} />);
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('Skill');
+    expect(frame).toContain('loaded skill: pdf-fill');
+    expect(frame).toContain('3 resource files');
+  });
+});
+
+describe('ToolGroupCell view_image result', () => {
+  test('renders a compact image line marked as shown to the model', () => {
+    const cell: Extract<TranscriptCell, { kind: 'tool-group' }> = {
+      id: 'tgi',
+      kind: 'tool-group',
+      collapsed: false,
+      complete: true,
+      tools: [
+        {
+          call: {
+            toolCallId: 'i1',
+            toolName: 'view_image',
+            input: { path: 'design/mock.png' },
+          },
+          result: {
+            toolCallId: 'i1',
+            toolName: 'view_image',
+            output: {
+              path: 'design/mock.png',
+              image_url: 'data:image/png;base64,QQ==',
+              detail: 'original',
+              mediaType: 'image/png',
+              bytes: 2048,
+            },
+            media: {
+              kind: 'image',
+              dataUrl: 'data:image/png;base64,QQ==',
+              mediaType: 'image/png',
+              detail: 'original',
+            },
+          },
+          startedAt: 0,
+          endedAt: 50,
+        },
+      ],
+    };
+    const { lastFrame } = render(<ToolGroupCell cell={cell} width={WIDTH} />);
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('view_image');
+    expect(frame).toContain('design/mock.png');
+    expect(frame).toContain('image/png');
+    expect(frame).toContain('2.0 kB');
+    expect(frame).toContain('original');
+    expect(frame).toContain('shown to the model');
+  });
+});
+
 describe('ApprovalCell', () => {
   test('pending Write renders header + path + diff + footer', () => {
     const cell: Extract<TranscriptCell, { kind: 'approval' }> = {
@@ -114,6 +279,48 @@ describe('ApprovalCell', () => {
     expect(frame).toContain('(a)');
     expect(frame).toContain('(n)');
     expect(frame).toContain('awaiting decision');
+  });
+
+  test('pending apply_patch lists every file op + per-file diff', () => {
+    const cell: Extract<TranscriptCell, { kind: 'approval' }> = {
+      id: 'ap1',
+      kind: 'approval',
+      toolName: 'apply_patch',
+      preview: {
+        kind: 'apply-patch',
+        files: [
+          {
+            path: 'src/new.ts',
+            op: 'add',
+            diff: { ...buildDiff(), created: true },
+          },
+          { path: 'src/old.ts', op: 'update', diff: buildDiff() },
+          { path: 'src/gone.ts', op: 'delete' },
+          {
+            path: 'src/a.ts',
+            op: 'move',
+            movePath: 'src/b.ts',
+            diff: buildDiff(),
+          },
+        ],
+      },
+      status: 'pending',
+      selectedIndex: 0,
+      feedback: '',
+      focusMode: 'options',
+    };
+    const { lastFrame } = render(<ApprovalCell cell={cell} width={WIDTH} />);
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('Permission required');
+    expect(frame).toContain('apply_patch · 4 files');
+    expect(frame).toContain('add');
+    expect(frame).toContain('src/new.ts');
+    expect(frame).toContain('update');
+    expect(frame).toContain('delete');
+    expect(frame).toContain('move');
+    expect(frame).toContain('src/a.ts → src/b.ts');
+    expect(frame).toContain('Approve');
+    expect(frame).toContain('Reject');
   });
 
   test('pending Bash shows the command instead of a diff', () => {

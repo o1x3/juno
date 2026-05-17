@@ -47,6 +47,7 @@ export const glyphs = {
   approvalEdit: '→',
   approvalWrite: '→',
   approvalMultiEdit: '↻',
+  approvalPatch: '⊹',
   approvalBash: '#',
   bullet: '·',
   arrowDown: '↓',
