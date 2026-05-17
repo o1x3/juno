@@ -1,5 +1,5 @@
 import { realpathSync } from 'node:fs';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 
 export class WorkspaceEscapeError extends Error {
@@ -50,6 +50,27 @@ export function resolveInside(workspaceRoot: string, userPath: string): string {
 
 export async function ensureParent(path: string): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
+}
+
+/**
+ * Overwrite a file atomically: write a sibling temp file, then rename over the
+ * target. rename(2) is atomic within a filesystem, so a crash mid-write can
+ * never leave a half-written (corrupt) file — readers see either the old or
+ * the new content. Used for rewriting the session JSONL (undo / compaction).
+ */
+export async function atomicWrite(
+  path: string,
+  content: string,
+): Promise<void> {
+  await ensureParent(path);
+  const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
+  await writeFile(tmp, content, 'utf8');
+  try {
+    await rename(tmp, path);
+  } catch (error) {
+    await rm(tmp, { force: true }).catch(() => {});
+    throw error;
+  }
 }
 
 export function truncateText(value: string, limit: number): string {

@@ -196,9 +196,22 @@ export class AgentManager {
         error: `task_name '${requested}' is already in use by a live agent`,
       };
     }
-    this.counter += 1;
     const id = `agent-${crypto.randomUUID().slice(0, 8)}`;
-    const taskName = requested ? requested : `task_${this.counter}`;
+    let taskName: string;
+    if (requested) {
+      taskName = requested;
+    } else {
+      // Auto names must also be unique among live agents (a user could have
+      // explicitly taken "task_2").
+      do {
+        this.counter += 1;
+        taskName = `task_${this.counter}`;
+      } while (
+        [...this.agents.values()].some(
+          (r) => r.taskName === taskName && r.status !== 'shutdown',
+        )
+      );
+    }
     const rec: AgentRecord = {
       id,
       taskName,

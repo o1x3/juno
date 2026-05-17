@@ -6,9 +6,9 @@
 // structured-checkpoint summary prompt) but operating on Juno's append-only
 // JSONL SessionEvents instead of pi's entry tree.
 
-import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import { atomicWrite } from '@/core/fs';
 import { readSessionEvents } from '@/core/session-store';
 import type { ModelClient, SerializedMessage, SessionEvent } from '@/types';
 
@@ -243,7 +243,7 @@ export async function compactSession(opts: {
   const rewritten = [marker, ...tail];
   const path = join(opts.sessionsDir, `${opts.sessionId}.jsonl`);
   const body = rewritten.map((e) => JSON.stringify(e)).join('\n');
-  await writeFile(path, body.length > 0 ? `${body}\n` : '', 'utf8');
+  await atomicWrite(path, body.length > 0 ? `${body}\n` : '');
 
   return {
     compacted: true,

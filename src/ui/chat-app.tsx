@@ -185,6 +185,11 @@ export function ChatApp({
     startedAt: 0,
     errorCount: 0,
   });
+  // Mirrors streaming.active for stale-closure-free reads inside slash
+  // handlers (so /undo and /compact can refuse to rewrite the JSONL that an
+  // in-flight turn is appending to).
+  const streamingActiveRef = useRef(false);
+  streamingActiveRef.current = streaming.active;
   const [spinnerFrame, setSpinnerFrame] = useState(0);
   const [now, setNow] = useState(Date.now());
   const sessionStartedRef = useRef(Date.now());
@@ -939,6 +944,14 @@ export function ChatApp({
           return;
         }
         case 'undo': {
+          if (streamingActiveRef.current) {
+            appendCell({
+              id: `un-${crypto.randomUUID()}`,
+              kind: 'plan-note',
+              text: '/undo: a turn is still running — press Ctrl+C to cancel it first.',
+            });
+            return;
+          }
           if (!activeSessionId) {
             appendCell({
               id: `un-${crypto.randomUUID()}`,
@@ -973,6 +986,14 @@ export function ChatApp({
           return;
         }
         case 'compact': {
+          if (streamingActiveRef.current) {
+            appendCell({
+              id: `cp-${crypto.randomUUID()}`,
+              kind: 'plan-note',
+              text: '/compact: a turn is still running — press Ctrl+C to cancel it first.',
+            });
+            return;
+          }
           if (!activeSessionId) {
             appendCell({
               id: `cp-${crypto.randomUUID()}`,

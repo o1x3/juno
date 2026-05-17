@@ -4,9 +4,9 @@
 // truncate the JSONL back to just before that turn's user message. Repeated
 // undo walks back turn by turn.
 
-import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import { atomicWrite } from '@/core/fs';
 import { readSessionEvents } from '@/core/session-store';
 import { SnapshotStore } from '@/core/snapshot';
 import type { SessionEvent } from '@/types';
@@ -74,7 +74,7 @@ export async function undoLastTurn(opts: {
   const remaining = events.slice(0, cutIdx);
   const path = join(opts.sessionsDir, `${opts.sessionId}.jsonl`);
   const body = remaining.map((e) => JSON.stringify(e)).join('\n');
-  await writeFile(path, body.length > 0 ? `${body}\n` : '', 'utf8');
+  await atomicWrite(path, body.length > 0 ? `${body}\n` : '');
 
   return {
     undone: true,

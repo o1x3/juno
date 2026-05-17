@@ -106,6 +106,15 @@ export function loadHooks(opts: {
   return mergeHookConfig(global, project);
 }
 
+// Cap how much hook output we keep — a misbehaving hook must not blow up
+// memory or the model context.
+const HOOK_OUTPUT_CAP = 256 * 1024;
+function cap(s: string): string {
+  return s.length > HOOK_OUTPUT_CAP
+    ? `${s.slice(0, HOOK_OUTPUT_CAP)}\n…[hook output truncated]`
+    : s;
+}
+
 const defaultSpawn: HookSpawn = async (command, stdin, cwd, timeoutMs) => {
   try {
     const proc = Bun.spawn(['sh', '-c', command], {
@@ -115,7 +124,9 @@ const defaultSpawn: HookSpawn = async (command, stdin, cwd, timeoutMs) => {
       stderr: 'pipe',
       env: process.env,
     });
+    let timedOut = false;
     const timer = setTimeout(() => {
+      timedOut = true;
       try {
         proc.kill();
       } catch {
@@ -128,7 +139,14 @@ const defaultSpawn: HookSpawn = async (command, stdin, cwd, timeoutMs) => {
     ]);
     const code = await proc.exited;
     clearTimeout(timer);
-    return { code, stdout, stderr };
+    if (timedOut) {
+      return {
+        code: 1,
+        stdout: '',
+        stderr: `hook timed out after ${timeoutMs}ms`,
+      };
+    }
+    return { code, stdout: cap(stdout), stderr: cap(stderr) };
   } catch (error) {
     return {
       code: 1,
