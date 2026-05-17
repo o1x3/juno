@@ -116,7 +116,12 @@ export type BuiltinToolName =
   | 'LSP'
   | 'view_image'
   | 'WebFetch'
-  | 'WebSearch';
+  | 'WebSearch'
+  | 'spawn_agent'
+  | 'send_input'
+  | 'wait_agent'
+  | 'close_agent'
+  | 'list_agents';
 
 // Optional multimodal payload on a tool result. When present, the model-client
 // layer serializes it into the provider's native image input so a vision model

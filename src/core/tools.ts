@@ -3,7 +3,7 @@ import { readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { relative, resolve, sep } from 'node:path';
 
 import { z } from 'zod';
-
+import { type AgentManager, createMultiAgentTools } from '@/core/agent-manager';
 import type { AgentDefinition } from '@/core/agents';
 import {
   ApplyPatchError,
@@ -72,6 +72,11 @@ export type ToolDeps = {
   skills?: SkillDefinition[];
   lspServerIds?: Set<string>;
   lspConnect?: LspConnect;
+  // When present, the multi-agent tools (spawn_agent / send_input /
+  // wait_agent / close_agent / list_agents) are registered. Never passed to
+  // sub-agents, so they cannot recurse.
+  agentManager?: AgentManager;
+  multiAgentVersion?: 'v1' | 'v2';
   // Resolves an executable on PATH (defaults to Bun.which). Injectable so the
   // missing-ripgrep path is deterministically testable.
   which?: (command: string) => boolean;
@@ -2045,6 +2050,16 @@ ${skills.map((s) => `- "${s.name}": ${s.description || '(no description)'}`).joi
         }
       },
     });
+  }
+
+  if (deps.agentManager) {
+    builtins.push(
+      ...createMultiAgentTools(
+        deps.agentManager,
+        deps.multiAgentVersion ?? 'v2',
+        deps.agents?.map((a) => a.name) ?? ['general'],
+      ),
+    );
   }
 
   if (deps.mcpTools && deps.mcpTools.length > 0) {

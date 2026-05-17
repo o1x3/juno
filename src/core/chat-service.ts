@@ -7,6 +7,7 @@ import {
   resolveCredential,
 } from '@/auth/storage';
 import { runAgentTurn } from '@/core/agent-loop';
+import { AgentManager } from '@/core/agent-manager';
 import { loadAgents, resolveAgentTools } from '@/core/agents';
 import {
   discoverCodexModels,
@@ -399,6 +400,69 @@ export async function startOrResumeChat(
     };
   };
 
+  // Stateful multi-agent registry (spawn_agent / send_input / wait_agent /
+  // close_agent / list_agents). Each agent is a background turn with its own
+  // persisted history; it reuses the sub-agent tool sandbox (no agentManager
+  // in childDeps → cannot recurse).
+  const agentManager = config.multiAgent
+    ? new AgentManager({
+        resolveAgentDef: (type) => agents.find((a) => a.name === type),
+        executor: async ({ agentDef, history, prompt, model, agentId }) => {
+          const childSessionId = `${sessionId}.${agentId}`;
+          const childModel =
+            model && routing.authMode !== 'oauth-codex'
+              ? model
+              : agentDef.model && routing.authMode !== 'oauth-codex'
+                ? agentDef.model
+                : routing.activeModel;
+          const childCtx = {
+            cwd: routing.runtimeConfig.cwd,
+            outputLimit: routing.runtimeConfig.toolOutputLimit,
+            readLineLimit: routing.runtimeConfig.readLineLimit,
+            bashTimeoutMs: routing.runtimeConfig.bashTimeoutMs,
+            sessionsDir: routing.runtimeConfig.sessionsDir,
+            sessionId: childSessionId,
+          };
+          const childAllTools = createBuiltinTools(childCtx, subAgentDeps);
+          const allowed = new Set(
+            resolveAgentTools(
+              agentDef,
+              childAllTools.map((t) => String(t.name)),
+            ),
+          );
+          const childTools = childAllTools.filter((t) =>
+            allowed.has(String(t.name)),
+          );
+          const childSystemPrompt = [
+            agentDef.prompt,
+            instructions.mergedContent
+              ? `Project instructions:\n${instructions.mergedContent}`
+              : '',
+          ]
+            .filter((s) => s.length > 0)
+            .join('\n\n');
+          const childResult = await runAgentTurn({
+            config: { ...routing.runtimeConfig, model: childModel },
+            sessionId: childSessionId,
+            model: childModel,
+            systemPrompt: childSystemPrompt,
+            userInput: prompt,
+            messages: history,
+            tools: childTools,
+            modelClient: routing.modelClient,
+            requestApproval: options.requestApproval,
+            requestUserAnswer: options.requestUserAnswer,
+            hooks: hookRunner,
+          });
+          return {
+            text: childResult.assistantText,
+            history: childResult.messages,
+            toolCalls: childResult.toolCalls.length,
+          };
+        },
+      })
+    : undefined;
+
   const allTools = createBuiltinTools(
     {
       cwd: routing.runtimeConfig.cwd,
@@ -409,6 +473,8 @@ export async function startOrResumeChat(
       sessionId,
     },
     {
+      agentManager,
+      multiAgentVersion: config.multiAgentVersion,
       fetchImpl: options.fetchImpl,
       summarize,
       exaApiKey: options.exaApiKey ?? config.exaApiKey,
